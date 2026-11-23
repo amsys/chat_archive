@@ -1,0 +1,122 @@
+# Canary for the next Nextcloud major. The main CI runs phpstan against the
+# nextcloud/ocp stubs that composer.lock pins. This workflow runs the same
+# check against the stubs of the newest supported branch and of master, the
+# next major. A failure here is an early warning, not a broken build.
+
+name: Nextcloud next
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      nc-max: ${{ steps.nc-max.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the highest supported Nextcloud version
+        id: nc-max
+        run: |
+          echo "version=$(php -r 'echo simplexml_load_file("appinfo/info.xml")->dependencies->nextcloud["max-version"];')" >> "$GITHUB_OUTPUT"
+
+  canary:
+    runs-on: ubuntu-latest
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        ocp: ['dev-stable${{ needs.matrix.outputs.nc-max }}', 'dev-master']
+
+    name: ocp ${{ matrix.ocp }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_sqlite, openssl, zlib
+          coverage: none
+
+      - name: Install php packages
+        run: composer install --no-interaction --no-progress
+
+      # composer.json pins the platform to php 8.1, the app's minimum. The
+      # new stubs need php 8.3, so raise the platform for this job only.
+      - name: Raise the composer platform to php 8.3
+        run: composer config platform.php 8.3
+
+      - name: Replace the OCP stubs with ${{ matrix.ocp }}
+        run: |
+          composer require --dev --no-update 'nextcloud/ocp:${{ matrix.ocp }}'
+          composer update nextcloud/ocp --with-all-dependencies
+          composer show nextcloud/ocp | grep -E '^(versions|source)'
+
+      # A class that implements or extends a removed OCP type fails here with
+      # a fatal error. phpstan alone can miss this for a class no path loads.
+      #
+      # composer.json has no psr-4 autoload block (the app loads through
+      # Nextcloud's own autoloader at runtime, not composer's), so
+      # class_exists() here would fail on every class without a stand-in
+      # autoloader. Register one for this step only, for OCA\ChatArchive and
+      # for OCP/NCU, whose own package also ships no autoload block.
+      - name: Load every class in lib/
+        run: |
+          php -r '
+            require "vendor/autoload.php";
+            spl_autoload_register(function ($class) {
+                $map = [
+                    "OCA\\ChatArchive\\" => __DIR__ . "/lib/",
+                    "OCP\\" => __DIR__ . "/vendor/nextcloud/ocp/OCP/",
+                    "NCU\\" => __DIR__ . "/vendor/nextcloud/ocp/NCU/",
+                ];
+                foreach ($map as $prefix => $dir) {
+                    if (strncmp($prefix, $class, strlen($prefix)) === 0) {
+                        $file = $dir . str_replace("\\", "/", substr($class, strlen($prefix))) . ".php";
+                        if (is_file($file)) { require $file; }
+                        return;
+                    }
+                }
+            });
+            $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("lib"));
+            foreach ($files as $file) {
+              if ($file->getExtension() !== "php") { continue; }
+              $class = "OCA\\ChatArchive\\" . str_replace("/", "\\", substr($file->getPathname(), 4, -4));
+              if (!class_exists($class) && !interface_exists($class) && !enum_exists($class)) {
+                fwrite(STDERR, "Not loaded: $class\n");
+                exit(1);
+              }
+              echo "Loaded: $class\n";
+            }'
+
+      - name: PHPStan
+        run: composer lint
+
+  report:
+    permissions:
+      issues: write
+    runs-on: ubuntu-latest
+    needs: canary
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    steps:
+      - name: Open or update the canary issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title='Nextcloud next: canary failing'
+          number=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          body="The canary failed on $(date -u +%F). Run: $RUN_URL"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

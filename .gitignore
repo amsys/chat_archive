@@ -1,0 +1,11 @@
+node_modules/
+js/
+build/
+.nc-test/
+memory/
+vendor/
+.deploy.env
+deploy.sh
+.state/
+docs/features/
+.scratch/

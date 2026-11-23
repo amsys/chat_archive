@@ -1,0 +1,24 @@
+parameters:
+    level: 6
+    paths:
+        - lib
+        - tests
+    excludePaths:
+        - tests/fixtures
+        - tests/phpstan
+        - tests/stubs
+        - tests/reader_check.php
+    scanDirectories:
+        - vendor/nextcloud/ocp
+    scanFiles:
+        - tests/phpstan/stubs.php
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # the OCP response generics (status, payload shape, headers) add no check the OCS tests do not run
+        -
+            identifier: missingType.generics
+            message: '#OCP\\AppFramework\\Http\\(Data|Template)Response#'
+    # same threshold as SonarCloud
+    cognitive_complexity:
+        function: 15
+        class: 60

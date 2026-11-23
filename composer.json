@@ -1,0 +1,27 @@
+{
+    "name": "amsys/chat_archive",
+    "description": "Chat Archive Nextcloud app: development tooling only, the app has no runtime dependencies",
+    "type": "project",
+    "license": "AGPL-3.0-or-later",
+    "config": {
+        "platform": {
+            "php": "8.1"
+        },
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
+    },
+    "require-dev": {
+        "doctrine/dbal": "^4.2",
+        "nextcloud/ocp": "^32.0",
+        "phpstan/extension-installer": "^1.4",
+        "phpstan/phpstan": "^2.1",
+        "symfony/console": "^6.4",
+        "tomasvotruba/cognitive-complexity": "^1.0"
+    },
+    "scripts": {
+        "lint": "phpstan analyse --memory-limit=1G",
+        "test": "./tests/run.sh"
+    }
+}

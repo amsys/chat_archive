@@ -1,0 +1,27 @@
+# trueup configuration. The trueup skill writes this file. A person can edit it.
+# comments do not survive a config write; trueup writes this file
+version = 1
+run_date = "2026-11-17"
+
+[languages]                  # one key per language: strict | clean | off
+python = "clean"
+typescript = "clean"
+vue = "clean"
+shell = "clean"
+php = "off"
+
+[refs]
+declared = [".state/runs/settings-waha/03-design.md"]   # the design that declares the D2x and D3x ids
+id_forms = ["D<n>.<m>"]
+
+[layout]
+front_matter = false         # the five doc files keep fixed paths and no front matter
+index = false                # the root README is the index; there is no docs/README.md
+
+[[keep]]
+id = "secret-content:tests/fixtures/make_fixture.py"
+reason = "fixture backup key for the test backup, not a real key"
+
+[[keep]]
+id = "secret-content:tests/nc_integration.sh"
+reason = "login of the throwaway test container, not a real account"

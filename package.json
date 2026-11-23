@@ -1,0 +1,37 @@
+{
+  "name": "chat_archive",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "ENTRY=main vite build && ENTRY=settings vite build",
+    "dev": "ENTRY=main vite build --mode development && ENTRY=settings vite build --mode development",
+    "l10n": "node scripts/l10n.mjs",
+    "lint": "eslint . && node scripts/l10n.mjs --check",
+    "lint:fix": "eslint . --fix",
+    "test": "./tests/run.sh"
+  },
+  "dependencies": {
+    "@nextcloud/auth": "^2.5.0",
+    "@nextcloud/axios": "^2.5.0",
+    "@nextcloud/dialogs": "^7.0.0",
+    "@nextcloud/initial-state": "^2.2.0",
+    "@nextcloud/l10n": "^3.1.0",
+    "@nextcloud/router": "^3.0.0",
+    "@nextcloud/vue": "^9.0.0",
+    "vue": "^3.5.0",
+    "vue-material-design-icons": "^5.3.0"
+  },
+  "devDependencies": {
+    "@nextcloud/eslint-config": "^9.0.1",
+    "@nextcloud/vite-config": "^2.5.0",
+    "eslint": "^10.10.0",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "sass": "^1.80.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6"
+  },
+  "engines": {
+    "node": "^20 || ^22 || >=24"
+  }
+}

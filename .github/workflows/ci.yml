@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint, static analysis and PHP checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install node packages
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: ESLint
+        run: npx eslint .
+
+      - name: Translations
+        run: node scripts/l10n.mjs --check
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_sqlite, openssl, zlib
+          coverage: none
+
+      - name: Install php packages
+        run: composer install --no-interaction --no-progress
+
+      - name: PHPStan
+        run: composer lint
+
+      - name: Crypt15 check
+        run: php -d zend.assertions=1 -d assert.exception=1 tests/crypt15_check.php
+
+      - name: Media linker check
+        run: php -d zend.assertions=1 -d assert.exception=1 tests/media_linker_check.php
+
+      - name: Reader check
+        run: php -d zend.assertions=1 -d assert.exception=1 tests/reader_check.php
+
+  integration:
+    name: Integration test (Nextcloud ${{ matrix.nextcloud }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nextcloud: ['32', '34', '35']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # the container serves js/, which is built and not stored in git
+      - name: Install node packages
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run the integration test
+        run: ./tests/nc_integration.sh
+        env:
+          IMAGE: nextcloud:${{ matrix.nextcloud }}-apache
