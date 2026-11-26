@@ -6,14 +6,17 @@ namespace OCA\ChatArchive\Cron;
 
 use OCA\ChatArchive\Db\Source;
 use OCA\ChatArchive\Db\SourceMapper;
-use OCA\ChatArchive\Service\ImportRunningException;
+use OCA\ChatArchive\Service\SourceBusyException;
 use OCA\ChatArchive\Service\ImportService;
 use OCA\ChatArchive\Service\SyncService;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\QueuedJob;
 
-/** "Import now" from the settings page: one forced run of one source. */
+/**
+ * "Import now" from the settings page, for one source: a forced import in
+ * mode backup, then a sync when the source has a WAHA session.
+ */
 class ImportSourceJob extends QueuedJob {
 	public function __construct(
 		ITimeFactory $time,
@@ -31,11 +34,11 @@ class ImportSourceJob extends QueuedJob {
 		} catch (DoesNotExistException) {
 			return;
 		}
-		// arch: D25.2
+		// A live-only source has no backup file: only the sync below runs for it.
 		if ($source->getMode() === Source::MODE_BACKUP) {
 			try {
 				$this->import->run($source, true);
-			} catch (ImportRunningException) {
+			} catch (SourceBusyException) {
 				// lost the claim to another worker; that one owns the source row
 			} catch (\Throwable) {
 				// recorded on the source row by ImportService
@@ -45,7 +48,7 @@ class ImportSourceJob extends QueuedJob {
 		if ($syncs) {
 			try {
 				$this->sync->run($source);
-			} catch (ImportRunningException) {
+			} catch (SourceBusyException) {
 				// lost the claim to another worker; that one owns the source row
 			}
 		}

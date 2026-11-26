@@ -20,8 +20,6 @@ use OCP\Util;
  * Personal settings page. The initial state has the keys of
  * GET /settings/sources. The sources have no `backupAt` here: only
  * that route adds it.
- *
- * arch: D26.1
  */
 class Personal implements ISettings {
 	public function __construct(

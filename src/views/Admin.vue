@@ -1,11 +1,10 @@
 <!--
   Admin settings page: the status of jobs and sources, the WAHA live sync
   settings with the session table, and the full text search switch.
-  arch: D28.1, D27.2
 -->
 <template>
 	<div>
-		<!-- arch: D28.1 section 1: status -->
+		<!-- Section 1: status -->
 		<NcSettingsSection
 			:name="t('chat_archive', 'Status')"
 			:description="t('chat_archive', 'Background jobs import the backups and run the live sync.')">
@@ -25,10 +24,10 @@
 			</template>
 		</NcSettingsSection>
 
-		<!-- arch: D28.1 section 2: live sync (WAHA) -->
+		<!-- Section 2: live sync (WAHA) -->
 		<NcSettingsSection
 			:name="t('chat_archive', 'Live sync (WAHA)')"
-			:description="t('chat_archive', 'The archive reads new messages from a WAHA server. It sends only read requests. Each session feeds one source of the user that you assign to it.')">
+			:description="t('chat_archive', 'The archive reads new messages from a WAHA server. It sends only read requests. Each session supplies messages to one source of the user that you assign to it.')">
 			<form class="ca-admin__form" @submit.prevent="save">
 				<NcCheckboxRadioSwitch v-model="waha.enabled" type="switch">
 					{{ t('chat_archive', 'Allow live sync through WAHA') }}
@@ -49,7 +48,7 @@
 					min="0"
 					max="200"
 					:label="t('chat_archive', 'Media files per sync run')"
-					:helperText="t('chat_archive', '0 = no media files. The maximum is 200.')" />
+					:helperText="t('chat_archive', 'With 0, the sync loads no media files. The maximum is 200.')" />
 				<NcCheckboxRadioSwitch v-model="realtime" type="switch">
 					{{ t('chat_archive', 'Realtime updates for an open chat') }}
 				</NcCheckboxRadioSwitch>
@@ -86,7 +85,7 @@
 								{{ t('chat_archive', 'Status') }}
 							</th>
 							<th scope="col">
-								{{ t('chat_archive', 'User ID (empty = not assigned)') }}
+								{{ t('chat_archive', 'User ID. Leave it empty when the session is not assigned.') }}
 							</th>
 						</tr>
 					</thead>
@@ -104,7 +103,7 @@
 					</tbody>
 				</table>
 
-				<!-- arch: D27.2 the same translated string as in the source dialog -->
+				<!-- The same translated string as in the source dialog -->
 				<NcNoteCard type="warning">
 					{{ t('chat_archive', 'WAHA is an unofficial WhatsApp client. Its use is against the WhatsApp Terms of Service, and WhatsApp can restrict or ban a number that uses one. Chat Archive only reads; it never sends. In daily use it reads the few messages since the last sync. The first sync of a live-only source loads the history and, when the administrator allows it, its media in a short time, which can look like automation. Start from a phone backup when you can.') }}
 				</NcNoteCard>
@@ -121,7 +120,7 @@
 			</form>
 		</NcSettingsSection>
 
-		<!-- arch: D28.1 section 3: full text search -->
+		<!-- Section 3: full text search -->
 		<NcSettingsSection
 			:name="t('chat_archive', 'Full text search')"
 			:description="t('chat_archive', 'Index chat messages with the Nextcloud full text search app for ranked, fast search. Turning this off stops new indexing but leaves already-indexed messages in the search platform; run \'occ fulltextsearch:reset chat_archive\' to remove them.')">
@@ -180,7 +179,7 @@ export default {
 	name: 'AdminSettings',
 	components: { NcButton, NcCheckboxRadioSwitch, NcLoadingIcon, NcNoteCard, NcPasswordField, NcSettingsSection, NcTextField },
 	data() {
-		// arch: D26.2 same shape as GET /admin/status
+		// The same shape as GET /admin/status
 		const status = loadState('chat_archive', 'adminStatus', {
 			jobs: { mode: 'ajax', lastRun: 0 },
 			sources: { total: 0, live: 0, failing: [] },
@@ -220,7 +219,7 @@ export default {
 		},
 
 		sourcesLine() {
-			return t('chat_archive', '{n} sources, {m} with live sync', { n: this.sources.total, m: this.sources.live }, undefined, { escape: false, sanitize: false })
+			return t('chat_archive', 'Sources: {n}. With live sync: {m}.', { n: this.sources.total, m: this.sources.live }, undefined, { escape: false, sanitize: false })
 		},
 	},
 
@@ -300,7 +299,7 @@ export default {
 				this.noticeType = 'success'
 				this.notice = checked ? t('chat_archive', 'Enabled') : t('chat_archive', 'Disabled')
 			} catch (e) {
-				this.notice = e.response?.data?.ocs?.data?.error ?? e.message
+				this.notice = errorText(e)
 				this.noticeType = 'error'
 			} finally {
 				this.busy = false

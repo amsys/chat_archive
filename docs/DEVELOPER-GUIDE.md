@@ -6,7 +6,7 @@ app. For setup and daily use see the [user guide](USER-GUIDE.md).
 ## How it works
 
 ```
-phone     WhatsApp writes msgstore.db.crypt15 every night (end-to-end encrypted, 64-digit key)
+phone     WhatsApp writes msgstore.db.crypt15 every night (end-to-end encrypted, 64-digit backup key)
 phone     Nextcloud app auto-uploads WhatsApp/Databases and WhatsApp/Media/* to your Nextcloud
 server    Chat Archive decrypts the backup into memory only, reads the SQLite
           database from there, adds new chats, messages, media and calls
@@ -22,9 +22,9 @@ file id.
 
 | Component | Location | Function |
 |---|---|---|
-| App registration | `appinfo/info.xml` | Declares the app id, the cron job, the occ command, the settings pages, the full text search provider and the navigation entry. |
+| App registration | `appinfo/info.xml` | Declares the app id, the two background jobs, the two occ commands, the settings pages, the full text search provider and the navigation entry. |
 | Application | `lib/AppInfo/Application.php` | Registers the file listener, the backup listener and the unified search provider. |
-| Migrations | `lib/Migration/` | Create and change the five tables. |
+| Migrations | `lib/Migration/` | Create and change the six tables. |
 | Source | `lib/Db/Source.php`, `lib/Db/SourceMapper.php` | One configured backup or live source: provider, folder, encrypted secret, delete policy, import state, live sync fields. `SourceMapper::queue()` and `claim()` guard the import state. |
 | Archive store | `lib/Db/ArchiveStore.php` | All reads and writes of chats, messages, media and calls. |
 | Provider | `lib/Source/IProvider.php` | One chat platform. Finds the backup file and opens it. |
@@ -122,9 +122,12 @@ trusted.
   import run and drops it when the import ends, on success or on failure.
   See *WhatsApp database reader*.
 - Every method that receives decrypted data or the backup key as a parameter
-  is marked with `#[\SensitiveParameter]` (PHP 8.2+), so exception traces do
-  not leak them into the log file. A method without the mark still leaks
-  its arguments when an exception holds it in a trace; the full list is in
+  is marked with `#[\SensitiveParameter]`, so exception traces do not leak
+  them into the log file. The mark has an effect on PHP 8.2 and later only.
+  PHP 8.1 reads the attribute and ignores it. On PHP 8.1 the rule I20.7
+  below protects the log: no throwable of the import or sync chain goes to
+  the logger. A method without the mark still leaks its arguments when an
+  exception holds it in a trace; the full list is in
   `lib/Source/WhatsApp/Crypt15.php`, `lib/Source/WhatsApp/MemDb.php`,
   `lib/Source/IProvider.php` and `lib/Source/WhatsApp/WhatsAppProvider.php`.
 - `MsgstoreReader` opens the in-memory database with `trusted_schema = OFF`,
@@ -169,25 +172,30 @@ and one line in `ProviderRegistry::PROVIDERS`. Nothing else changes. See
 
 | Trigger | Class | Behaviour |
 |---|---|---|
-| Cron, every 6 hours | `Cron\ImportJob` | Imports every source. Skips a source when its backup did not change. |
+| Cron, every 6 hours | `Cron\ImportJob` | Imports every backup source that has no queued or running import. Skips a source when its backup did not change. |
 | "Import now" in the settings | `Cron\ImportSourceJob` | One forced import of one source. Runs with the next cron tick. |
 | A write to the backup file | `Listener\BackupListener` | The upload of a backup adds `Cron\ImportSourceJob` for that source. Runs with the next cron tick. |
 | Command line | `Command\Import` | Imports at once. The [user guide](USER-GUIDE.md) lists the options. |
 
 `SourceMapper::queue()` sets `queued` with one UPDATE that matches only an idle or stale state. The route and the backup listener add the job only when it returns true, so two clicks queue one job. `claim()` takes a source for a run in the same way.
 
-`ImportService::importOne()` returns per source: `skipped` when the backup
+`ImportService::run()` returns per source: `skipped` when the backup
 did not change and the import was not forced; otherwise `chats`, `messages`,
 `calls`, `linked` (media rows given a file id), `deleted` (messages newly
 marked `missing`), `revoked`, `edited` and `gone_chats` (chats newly marked
-`gone_at`). The four new keys come after `linked`, so the occ command's
-JSON line still starts the same way it did before this feature.
+`gone_at`). The last four keys came with 0.2.0. They come after `linked`,
+so the JSON object still starts as it did in 0.1.x.
 
-The occ command prints one JSON line per source. It returns exit code 1 when
-one import failed.
+The occ command prints one line per source. The line starts with the label
+`<user> [<source id>] <label> (<folder>)` and a colon. Then comes that JSON
+object, `skipped, live source` for a live-only source, `an import or a sync
+is running` when the source is busy, or the message of the failure. The
+command returns exit code 1 when one import failed.
 
-A decrypted backup above 1024 MiB (1 GiB) fails the import with that size in
-`last_error`. There is no fallback to disk. The process that runs the import
+A decrypted backup above the size cap fails the import with
+`backup_too_large` in `last_error`; the log line gives the size. The
+[user guide](USER-GUIDE.md#troubleshooting) gives the limits. There is no
+fallback to disk. The process that runs the import
 (cron or occ) needs free RAM of about 1.05 times the decrypted backup size,
 outside PHP's own `memory_limit`; two imports running at the same time need
 that much RAM twice. See *WhatsApp database reader*.
@@ -211,32 +219,32 @@ The source row holds the progress:
 while a state is set queues nothing.
 
 The import service sets `running` at the start. It clears the state in a
-`finally` block, also after a failure. A failure message goes to
-`last_error`. A success clears `last_error`.
+`finally` block, also after a failure. A failure puts an error code in
+`last_error` (see *Failure modes*). A success clears `last_error`.
 
 ### Change detection
 
 The import service builds a stamp from the etag and the size of the backup
 file. It stores the stamp in `last_backup`. When the stamp did not change
 and `--force` is not set, the import only runs the media linker. This makes
-the 6-hour cron cheap on days without a new backup.
+the timed import cheap on days without a new backup.
 
 Once the backup is read, the import compares each message and chat with
 what the archive already has. See *Change detection rules*.
 
 ### Steps of one import
 
-1. Find the backup file in the source folder. WhatsApp accepts
+1. Find the backup file in the source folder. The provider accepts
    `msgstore.db.crypt15` at the folder root or in `Databases/`.
 2. Decrypt the secret with `ICrypto`. Drop it from memory after the reader opened.
 3. Read the backup as a stream from Nextcloud. Decrypt it straight into an
-   in-memory SQLite database (`MemDb`); fail with a size message above
-   1024 MiB, before the loop that would grow the database.
-5. For each chat from the reader:
+   in-memory SQLite database (`MemDb`); fail with `backup_too_large` above
+   the size cap, before the loop that would grow the database.
+4. For each chat from the reader:
    1. Insert the chat, or update its name, `phone_archived` and `gone_at`
       (`upsertChat`; see *Change detection rules*).
    2. Load the known messages of the chat (id, kind, `deleted`, `seen_hash`),
-      backfilling `seen_hash` for rows imported before this feature.
+      backfilling `seen_hash` for rows imported before 0.2.0.
    3. Open one transaction.
    4. For each message from the reader: insert it if its platform id is new,
       or apply the change detection rules to it if the id is already
@@ -245,14 +253,13 @@ what the archive already has. See *Change detection rules*.
       whose platform id did not appear in this backup.
    6. Refresh `last_at` and `msg_count` when a message was added.
    7. Commit.
-6. Insert each call whose platform id is new.
-7. Mark `gone_at` on every chat of the source that this backup did not
+5. Mark `gone_at` on every chat of the source that this backup did not
    report and that is not already marked, now that the chat loop finished
    without an error.
-8. Close the reader. The reader deletes the decrypted database.
-9. Delete the temp folder.
-10. Run the media linker.
-11. Store the stamp and the time.
+6. Insert each call whose platform id is new.
+7. Close the reader. This frees the in-memory database.
+8. Run the media linker.
+9. Store the stamp and the time.
 
 New messages are inserted; a stored message is never deleted, and its
 `body` and `kind` never change. A message deleted or edited on the phone
@@ -275,7 +282,13 @@ forced re-import of the same backup adds no rows and sets no new marks. See
    scrubbed body with `ArchiveStore::bodyHash()`. If the hash differs from
    the stored `seen_hash`, insert a row in the `edit` table with the
    scrubbed body and set `seen_hash` and `edited_at`. `message.body` is
-   never overwritten, so it always holds the first version.
+   never overwritten, so it always holds the first version. Exception: a
+   media message that only the live sync has seen has no body, because the
+   sync keeps its text in `media.caption` or `media.file_name`. When the
+   backup body has the hash of one of these, set only `seen_hash`. That
+   text is the first version, not an edit. Migration
+   `Version0201Date20261126000000` removes the false edits that 0.2.0
+   recorded in this case.
 4. Otherwise nothing changes.
 
 A message whose platform id is not in this backup, and that is not already
@@ -297,8 +310,9 @@ keeps a forced re-import of an unchanged backup from recording false edits.
 
 ### WhatsApp backup format
 
-`Crypt15::decrypt()` reads a single-file `msgstore.db.crypt15` backup as a
-stream. No encrypted copy is made.
+`Crypt15::decryptTo()` reads a single-file `msgstore.db.crypt15` backup as a
+stream and gives the decrypted bytes to a sink, here `MemDb`. No encrypted
+copy is made.
 
 | Part | Size | Content |
 |---|---|---|
@@ -309,7 +323,7 @@ stream. No encrypted copy is made.
 | Tag | 16 bytes | GCM tag. Not verified. |
 | Checksum | 16 bytes | md5 of everything before it. |
 
-The AES key comes from the 64-digit key: HMAC-SHA256 with a zero key gives
+The AES key comes from the backup key: HMAC-SHA256 with a zero key gives
 the private key, HMAC-SHA256 of `"backup encryption" + 0x01` with the
 private key gives the AES key.
 
@@ -329,7 +343,7 @@ connection that `MemDb` returns. The queries were checked against a real
 
 `MemDb` (`lib/Source/WhatsApp/MemDb.php`) is the sink `Crypt15` writes pages
 into. It checks the SQLite header, rejects a backup whose page count times
-its page size is above the 1 GiB cap before it allocates anything, loads
+its page size is above the size cap before it allocates anything, loads
 each page into a private, uniquely named `vfs=memdb` database, and hands
 back a second connection to the same database. Dropping that connection
 frees the memory; nothing under `open()` ever calls `fopen()` with mode
@@ -375,9 +389,10 @@ The reader reads the schema one time, when it opens the file. It uses
 
 Rules:
 
-- If a core table or a core column is missing, the reader throws a
-  `RuntimeException`. The message names each missing table or column. The
-  import service writes the message to `last_error` on the source row.
+- If a core table or a core column is missing, the reader throws an
+  `ImportException` with the code `unsupported_backup`. The message names
+  each missing table or column. The import service writes the code to
+  `last_error` on the source row and the message to the log line.
 - If an optional table or one of its columns is missing, the reader skips
   that feature only. The messages query does not join that table. The rows
   keep the same keys:
@@ -415,14 +430,26 @@ change. Every element that shows such a name also carries `dir="auto"`.
 
 ### Failure modes
 
-| Failure | Result |
-|---|---|
-| No backup file in the folder | `last_error`: "no backup file found in …". |
-| No key on the source | `last_error`: "no backup key set for this source". |
-| Wrong key | `last_error`: "… wrong key?". No rows change. |
-| Corrupt backup | `last_error` from zlib or the md5 trailer. No rows change: the decryption completes before the reader starts. |
-| Database error while the reader runs | `last_error` from PDO. Rows of chats that were committed stay. The next run adds the rest. |
-| Crash during import | `import_state` stays set for at most 6 hours, then counts as idle. |
+A failed import stores an error code in `last_error`, not the text of the
+exception. The code comes from the `ImportException` that the import chain
+throws (`lib/Service/ImportException.php`); every other throwable gives
+`import_failed`. The log line holds the message, the class and `file:line`.
+`src/errors.js` holds the text that the user sees for each code. A stored
+value that is not a code, for example the English text of an older version,
+shows as it is.
+
+| Failure | `last_error` | Result |
+|---|---|---|
+| The source folder is missing or is not a folder | `folder_missing` | No rows change. |
+| No backup file in the folder | `no_backup` | No rows change. |
+| No key on the source | `no_key` | No rows change. |
+| Nextcloud cannot open the backup file | `backup_unreadable` | No rows change. |
+| Wrong key, or a stored key that is not 64 hex characters | `wrong_key` | No rows change. |
+| Corrupt backup: truncated file, bad header or protobuf, md5 trailer mismatch, zlib error, OpenSSL error | `corrupt_backup` | No rows change: the decryption completes before the reader starts. |
+| Unsupported backup: a crypt14 file, a SQLite header that is not valid, a missing core table or column | `unsupported_backup` | No rows change. |
+| Decrypted backup above the size cap | `backup_too_large` | No rows change. |
+| Any other error, for example a database error while the reader runs | `import_failed` | Rows of chats that were committed stay. The next run adds the rest. |
+| Crash during import | `import_stopped` | `import_state` stays set for at most 6 hours, then counts as idle. The next claim of the stale state writes the code. |
 
 ## Live sync
 
@@ -435,12 +462,18 @@ The user guide shows what the user sees.
 `SyncService::run()`, called by `Cron\SyncJob` (every 15 minutes, only when
 the admin switch is on), by `Cron\ImportSourceJob` and by `occ chat_archive:sync`:
 
-1. Take the source with `claim()`. Another import or sync on the source throws `ImportRunningException`.
+1. Take the source with `claim()`. Another import or sync on the source throws `SourceBusyException`.
 2. Set a time box of 40 seconds (I20.10).
-3. Check in order: the switch (`waha_off`), the session assignment (`waha_unassigned`), the session state `WORKING` (`waha_session_state`), the account against `sync_me` (`waha_account_changed`; the first sync stores it), the source folder (`folder_missing`).
+3. Check in order: the switch (`waha_off`), the session assignment (`waha_unassigned`), the session state `WORKING` (`waha_session_state`), the account against `sync_me`, the source folder (`folder_missing`). The first sync stores the account that WAHA reports in `sync_me`. After that, a session that reports no account stops the sync with `waha_no_account`, and a session that reports another account stops it with `waha_account_changed`. The run stops and does not continue without the check, because a sync with no known account could write the chats of another account into the source. Nothing is marked or deleted. `WahaMapper::account()` holds this rule.
 4. Message pass: read every page of the chat overview, 50 chats each, from the first page to an empty page or the end of the message share (the first 30 seconds of the box). An up-to-date chat costs no message request, so a run after an interrupted run reaches the chats that it did not load. Read a chat only when WAHA's last time is newer than the stored `last_at`, or when the overview gives no last time and the chat has no `last_at`. Limit: such a chat gets new messages only when WAHA gives a last time again. Insert new messages in ascending order, one transaction per chat (I20.9). A new chat gets `in_backup = false`. A key that the backup holds is not inserted again.
 5. Media pass: in the rest of the time box, fetch up to `waha_media_per_run` pending files into `<source folder>/WAHA/<YYYY-MM>/` and point the media row at them. Files with fewer failed fetches come first, then the newest. A failed fetch adds to `sync_tries`. WAHA can take 12 seconds to report that it has no file for a message, so a file that failed before must not hold back the files behind it. A file that cannot be written adds one try and stops the media pass for that run.
-6. Set `sync_at` and clear `sync_error`, or set `sync_error` to the code of a `WahaException`. A throwable gives `waha_bad_response`. Clear the import state.
+6. Set `sync_at` and clear `sync_error`, or set `sync_error` to the code of a `WahaException`. Any other throwable gives `sync_failed`; its message, class and `file:line` go to the log (I20.7). Clear the import state.
+
+`occ chat_archive:sync` prints one JSON line per synced source, and each line
+starts with the source id: `{"source":<id>,"chats":..,"messages":..,"media":..}`
+after a run, `{"source":<id>,"error":"<code>"}` when the run stored a
+`sync_error`, and `{"source":<id>,"error":"running"}` when an import or a sync
+holds the source. The command returns exit code 1 when one line has `error`.
 
 A WAHA failure does not throw out of `run()`. It lands in `sync_error`. The
 codes `waha_down`, `waha_auth` and `waha_local_blocked` also stop the media
@@ -454,7 +487,7 @@ key (I20.6).
 | Method | Route | Function |
 |---|---|---|
 | GET | `/admin/status` | Background job mode and last run, the source counts, failing sources, and the WAHA settings without the key (`hasKey` only). |
-| PUT | `/admin/waha` | Save `enabled`, `url`, `apiKey`, `mediaPerRun` (0 to 200), `sessions` (session name to user ID) and `realtime`. A request without `apiKey`, `mediaPerRun`, `sessions` or `realtime` keeps the stored value of that field. A bad value returns 400 with `code`: `bad_url`, `bad_media_per_run`, `bad_session`, `unknown_user`. |
+| PUT | `/admin/waha` | Save `enabled`, `url`, `apiKey`, `mediaPerRun` (0 to 200), `sessions` (session name to user ID) and `realtime`. A request without `apiKey`, `mediaPerRun`, `sessions` or `realtime` keeps the stored value of that field. A bad value returns 400 with `code` (`bad_url`, `bad_media_per_run`, `bad_session`, `unknown_user`) and an English sentence in `error`. |
 | POST | `/admin/waha/test` | Calls the WAHA version and session routes. Returns `ok`, `version`, `engine`, `tier` and `sessions`, or `ok: false` with a `code`. |
 
 All three are admin only.
@@ -505,8 +538,8 @@ mirror of the tree of the phone. WhatsApp file names are unique enough.
 
 ### The file listener
 
-`Listener\FileListener` listens to `NodeRenamedEvent` and
-`BeforeNodeDeletedEvent`. It never blocks the operation of the user. A
+`Listener\FileListener` listens to `BeforeNodeRenamedEvent` (to keep the
+file id from before a move), `NodeRenamedEvent` and `BeforeNodeDeletedEvent`. It never blocks the operation of the user. A
 failure goes to the log and the operation continues.
 
 | Event | Action |
@@ -529,8 +562,7 @@ describes when to pick each one.
 
 ### The viewer
 
-The API returns `path`, `exists`, `mime`, `hasPreview` and `suspicious` for
-each media row. `hasPreview` is `IPreview::isAvailable()` for the file: a
+The API returns the fields of *Messages* for each media row. `hasPreview` is `IPreview::isAvailable()` for the file: a
 preview provider exists for the mime type and the file is not too large,
 forced to `false` when `suspicious` is true. A suspicious row shows a
 warning instead of a preview or a player, and the app never opens or
@@ -543,6 +575,22 @@ path:
   with `hasPreview`
 - the WebDAV URL of the path, for the file itself
 - the Files app URL with the file selected, for "Show in Files"
+
+`mimeMismatch` compares the type that WhatsApp recorded (`mime`) with the
+type that Nextcloud gives the file (`realMime`). `DisplayText::mimeMismatch()`
+holds the rule:
+
+- Both types are lower-cased and their parameters (`;codecs=...`) dropped.
+- Only the top-level type counts, the part before the `/`. `audio/ogg`
+  against `audio/ogg;codecs=opus`, or `application/zip` against
+  `application/x-zip-compressed`, is no mismatch. `image/jpeg` against
+  `application/x-msdownload` is a mismatch.
+- When Nextcloud gives `application/octet-stream` (the file cache could not
+  tell the type), there is no mismatch.
+- When one of the two types is missing, there is no mismatch.
+
+The browser marks a file with a mismatch (the user guide shows the mark) and
+gives the viewer the real type, not the recorded one.
 
 A left click on an image or a file runs the action from the personal
 settings (`Service\ClickAction`, stored through `OCP\Config\IUserConfig`).
@@ -631,7 +679,11 @@ id is `chat_archive_messages`.
 
 The provider reuses `ArchiveStore::search()` and shows messages across all
 sources of the calling user. Each result has the chat name as the title and
-the message text and time in the subline. Results link to the app root.
+the message text and time in the subline. A result links to the app page
+with the query parameters `source`, `chat`, `msg` (message id) and `at`
+(`sent_at` in ms). The link holds no message text. At start, `App.vue`
+reads the four values, removes them from the address with
+`history.replaceState()`, and opens the chat at that message.
 
 Supported filters:
 
@@ -667,7 +719,7 @@ Times are unix milliseconds unless the table says otherwise.
 |---|---|---|
 | GET | `/api/sources/{id}/chats` | Chats of one source, most recent first. |
 | GET | `/api/chats/{id}/messages` | One page of messages of one chat. |
-| POST | `/api/chats/{id}/live` | Realtime update of an open chat. `SyncService::runChat()` adds the new messages of this one chat from WAHA, with the checks of a sync and no media pass. Returns `live`, `added` and `lastAt`; `live` is false when the app value `waha_realtime` is off or the source has no session. The page (`MessageList.vue`) calls it every 8 seconds while the tab is visible, then loads the new rows with the messages route. With a memory cache, the server asks WAHA at most one time in 4 seconds for each chat. A WAHA failure adds nothing and is not stored. |
+| POST | `/api/chats/{id}/live` | Realtime update of an open chat. `SyncService::runChat()` adds the new messages of this one chat from WAHA, with the checks of a sync and no media pass. Returns `live`, `added` and `lastAt`; `live` is false when the app value `waha_realtime` is off or the source has no session. The page (`MessageList.vue`) calls it at the interval that [Realtime updates](USER-GUIDE.md#realtime-updates) gives, while the tab is visible, then loads the new rows with the messages route. With a memory cache, the server asks WAHA at most one time in 4 seconds for each chat. A WAHA failure adds nothing and is not stored. |
 | GET | `/api/search` | Messages across one or all sources. |
 | GET | `/api/sources/{id}/calls` | Calls of one source, newest first, up to 5000. |
 | POST | `/api/sources/{id}/names/refresh` | Clear the cached contact names of one source. |
@@ -678,7 +730,10 @@ Times are unix milliseconds unless the table says otherwise.
 Each chat carries `id`, `sourceId`, `platformChatId`, `name`, `displayName`,
 `isGroup`, `lastAt`, `msgCount`, `phoneArchived` and `goneAt`. The route
 resolves `name` for private chats from the address books of the user and
-caches the result on the row. `phoneArchived` is false when the backup has
+caches the result on the row. With no match it gives the stored name when
+that is a name, and the number if not. A backup stores the number as the
+name of a private chat; the live sync puts the name that WhatsApp holds in
+its place, and a later import keeps that name. `phoneArchived` is false when the backup has
 never reported the WhatsApp `archived` flag for the chat. `goneAt` is null
 unless a later backup stopped reporting the chat.
 
@@ -697,18 +752,46 @@ The cursor uses two columns because message ids are not monotonic per chat.
 Messages always come oldest first inside the page.
 
 The answer holds `messages` and `senders`. `senders` maps each sender jid on
-the page to a display name. A message with a file carries `media` with
-`fileId`, `path`, `exists`, `mime`, `size`, `fileName`, `caption` and
-`srcPath`. `path` is relative to the user folder. `exists` is false when the
-pointer does not resolve.
+the page to a display name.
 
-Each message also carries `deleted` (`missing`, `revoked` or null) and
-`editedAt` (unix ms of the newest recorded edit, or null). `body` is always
-the first version the archive saw; it does not change when `editedAt` is
-set. `deleted` and messages of a chat with `goneAt` set are left out of this
-route's rows when the calling user's `showDeleted` view preference is off
-(see *View preferences*); the route otherwise returns every row regardless
-of the preference.
+| Message field | Meaning |
+|---|---|
+| `id` | Message id in the archive. |
+| `sentAt` | Unix ms. |
+| `fromMe` | True for a message of the account owner. |
+| `sender` | Sender jid. Null for a message of the account owner, and when the sender is not known. |
+| `kind` | Message kind of the reader, for example `text`, `image` or `type_<n>`. |
+| `body` | The first version the archive saw. It does not change when `editedAt` is set. |
+| `latestBody` | Body of the newest recorded edit, or null when the message has no edit. |
+| `editedAt` | Unix ms of the newest recorded edit, or null. |
+| `deleted` | `missing`, `revoked` or null. |
+| `deletedAt` | Unix ms of the import that set `deleted`, or null. |
+| `call` | Call facts, or null. See below. |
+| `media` | Only on a message with a file. See below. |
+
+| Media field | Meaning |
+|---|---|
+| `id` | Media row id. |
+| `fileId` | Nextcloud file id, or null. |
+| `path` | Path relative to the user folder, or null when the pointer does not resolve. |
+| `displayPath` | `path` cleaned for display (see *Untrusted text*). Only present when the pointer resolves. |
+| `exists` | False when the pointer does not resolve. |
+| `hasPreview` | See *The viewer*. |
+| `mime` | The type that WhatsApp recorded. When it is empty and the file resolves, the type that Nextcloud gives the file. |
+| `realMime` | The type that Nextcloud gives the file, or null. |
+| `mimeMismatch` | True when `mime` and `realMime` name different kinds of file. *The viewer* holds the rule. |
+| `size` | Bytes, or null. |
+| `fileName` | File name from the backup, else the last part of `srcPath`. |
+| `realName` | Name of the Nextcloud file, or null. |
+| `caption` | Caption from the backup, or null. |
+| `srcPath` | Path on the phone, or null. |
+| `suspicious` | True when WhatsApp flagged the file. |
+
+Rows with `deleted` set are left out of this route's rows when the
+`showDeleted` view preference of the calling user is off (see *View
+preferences*). The chats route always returns every chat: the browser hides
+a chat with `goneAt` set (`showDeleted` off) or with `phoneArchived` true
+(`showArchived` off) from the chat list.
 
 A call message (`kind` `call_log` or `missed_call`) has a null `body` and
 carries `call` with `video`, `result` (`connected`, `missed`, `rejected`,
@@ -732,7 +815,7 @@ stays in the message's own `body` and is not repeated here.
 | `from`, `to` | int | Time range. |
 | `kind` | string | `text`, `image`, `video`, `audio`, `document`, `call`, `media`, `link`. |
 | `who` | string | `me` or `others`. |
-| `offset` | int | Page offset. Pages hold 50 hits. |
+| `offset` | int | Number of hits to skip, 0 to 10000. A page holds 50 hits. |
 
 The answer holds `messages`, `senders`, `chats` (chat id to name and source
 id) and `more`.
@@ -760,15 +843,15 @@ The answer holds `reset`, the number of chats whose cached name was cleared.
 
 | Method | Route | Function |
 |---|---|---|
-| GET | `/settings/sources` | Sources of the user and the list of providers. |
+| GET | `/settings/sources` | Sources of the user and the list of providers. Each source also carries `backupAt`: the modification time of the backup file in unix seconds, or null for a live-only source, a source with no backup file, or a storage error. |
 | POST | `/settings/sources` | Create a source. |
 | PUT | `/settings/sources/{id}` | Update a source. |
-| DELETE | `/settings/sources/{id}` | Delete a source and all its rows. Returns 409 with `code: preserve_on` while the preserve switch is on, and 409 `running` during an import. |
+| DELETE | `/settings/sources/{id}` | Delete a source and all its rows. Returns 409 with `code: preserve_on` while the preserve switch is on, and 409 `running` with the text "an import or a sync of this source is running" while an import or a sync holds the source. |
 | POST | `/settings/sources/{id}/import` | Queue one forced import. |
-| POST | `/settings/probe` | Looks for a backup file in a folder of the user. Returns `found`, and name, size and mtime when found. |
+| POST | `/settings/probe` | Looks for a backup file in a folder of the user: `folder`, and the optional `secret`. The folder and key checks of a save apply (`folder_not_found`, `not_a_folder`, `bad_key`). The probe only checks the format of the key and does not open the backup. Returns `found`, and name, size and mtime when found. |
 | PUT | `/settings/preserve` | Sets the preserve switch: `preserve` boolean. `GET /settings/sources` returns it with the `live` state (`enabled` and the sessions of the user). |
 | PUT | `/settings/fulltextsearch` | Admin only. Set the full text search switch. |
-| PUT | `/settings/click` | Set the left-click action of the user: `action` is `view`, `nc` or `custom`; `template` is the URL template for `custom`. |
+| PUT | `/settings/click` | Set the left-click action of the user: `action` is `view`, `nc` or `custom`; `template` is the URL template for `custom`. A bad action or template returns 400 with `code: bad_click_action`. |
 | PUT | `/settings/view` | Set the view preferences of the user: `showDeleted`, `showArchived`, both optional booleans. Returns the new `{showDeleted, showArchived}`. A parameter left out keeps its stored value. |
 
 #### View preferences
@@ -787,13 +870,13 @@ and turns both into `hide_deleted` / `hide_archived` search filters (see
 |---|---|---|---|
 | `provider` | yes | yes | A provider id. Today only `whatsapp`. |
 | `label` | yes | yes | Required. Shown in the UI. |
-| `folder` | yes | yes | Path in the user folder. Must exist and be a folder. |
+| `folder` | yes | yes | Path in the user folder. Must exist, be a folder and belong to the user; a folder that another user shared gives `folder_not_found`. |
 | `secret` | yes | no | WhatsApp: 64 hex characters. Empty on update keeps the stored one. |
 | `hasSecret` | no | yes | True when a secret is stored. |
 | `onDelete` | yes | yes | `restore`, `unlink` or `keep`. |
 | `lastBackup` | no | yes | Etag and size of the last imported backup. |
 | `lastSynced` | no | yes | Unix seconds. |
-| `lastError` | no | yes | Message of the last failed import, or null. |
+| `lastError` | no | yes | Error code of the last failed import (see *Failure modes*), or null. |
 | `importState` | no | yes | `queued`, `running` or null. |
 | `importSince` | no | yes | Unix seconds, or null. |
 | `mode` | create only | yes | `backup` or `live`. An update ignores it. |
@@ -802,7 +885,7 @@ and turns both into `hide_deleted` / `hide_archived` search filters (see
 | `syncAt`, `syncError`, `tosAt` | no | yes | Unix seconds, an error code, unix seconds. |
 
 A bad value returns HTTP 400 with an `error` message and a `code`. The secret is never
-returned. The codes: `unknown_provider`, `bad_mode`, `folder_not_found`, `not_a_folder`, `bad_policy`, `label_required`, `bad_key`, `live_not_allowed`, `bad_session`, `session_in_use`, `tos_required`, `backup_first`. `src/errors.js` holds the text of each code.
+returned. The codes: `unknown_provider`, `bad_mode`, `folder_not_found`, `not_a_folder`, `bad_policy`, `label_required`, `bad_key`, `live_not_allowed`, `session_required` (a new live-only source with no session), `bad_session` (a session that is not assigned to the user), `session_in_use`, `tos_required`, `backup_first`. `src/errors.js` holds the text of each code.
 
 The import route sets `importState` to `queued` and adds a background job.
 It returns the source. A second call while a state is set changes nothing.
@@ -819,7 +902,7 @@ The build writes two bundles: `chat_archive-main` for the app page and
 `chat_archive-settings` for the personal and admin settings pages. The `js/`
 folder is not in git.
 
-Node 20, 22 or 24 is required.
+Node 20, 22, or 24 or later is required.
 
 ## Tests
 
@@ -829,25 +912,34 @@ name.
 
 | Script | Needs | Covers |
 |---|---|---|
-| `tests/crypt15_check.php` | PHP with openssl and zlib, and the plain fixture `tests/fixtures/msgstore.db` (not in git, see Fixture) | Decrypt equals the plain fixture. A wrong key throws. A key of the wrong length throws. A corrupt file throws. Decrypting into a `MemDb` gives back the same bytes, page by page, as the plain fixture (WAL flag bytes aside). |
-| `tests/memdb_check.php` | PHP with pdo_sqlite and the memdb VFS (use the docker image) | A WAL-header backup loads. A backup whose page count times page size is above the 1 GiB cap throws before it grows the database. A truncated stream throws on `finish()`. Two `MemDb` objects stay apart. `abort()` twice is safe. |
+| `tests/crypt15_check.php` | PHP with openssl and zlib, SQLite with the memdb VFS (use the docker image), and the plain fixture `tests/fixtures/msgstore.db` | Decrypt equals the plain fixture. A wrong key throws. A key of the wrong length throws. A corrupt file throws. Decrypting into a `MemDb` gives back the same bytes, page by page, as the plain fixture (WAL flag bytes aside). |
+| `tests/memdb_check.php` | PHP with pdo_sqlite and the memdb VFS (use the docker image) | A WAL-header backup loads. A backup whose page count times page size is above the size cap throws before it grows the database. A truncated stream throws on `finish()`. Two `MemDb` objects stay apart. `abort()` twice is safe. |
 | `tests/media_linker_check.php` | PHP | The names the media linker tries for a backup name: as it is, then without a trailing dot or space. |
-| `tests/waha_mapper_check.php` | PHP | The WAHA mapper: chat ids to jids, key ids, message kinds, the neutral message row (sender rules for groups, 1:1 and lid), and media file names. |
-| `tests/sync_resume_check.php` | PHP | The real `SyncService` against the in-memory stand-ins of `tests/stubs/SyncStubs.php`, with 120 chats and a time box of 2 seconds: a run after an interrupted first run loads every chat, and one more run adds nothing. The media pass runs after a message pass that used its full share. A chat with no timestamp costs a message request only while it has no `last_at`. The media pass asks WAHA by the plain key id. A file that cannot be written counts one try and stops the media pass for that run. |
-| `tests/display_text_check.php` | PHP | `DisplayText::name()` strips control and bidirectional-override characters and leaves a ZWJ emoji and a Persian ZWNJ word unchanged. `DisplayText::mimeMismatch()` on the mismatch cases of *Media pointers*. |
+| `tests/waha_mapper_check.php` | PHP | The WAHA mapper: chat ids to jids, key ids, message kinds, the neutral message row (sender rules for groups, 1:1 and lid), and media file names. The account rule of a sync: no account (`waha_no_account`), another account (`waha_account_changed`), the first account to store. |
+| `tests/sync_resume_check.php` | PHP | The real `SyncService` against the in-memory stand-ins of `tests/stubs/SyncStubs.php`, with 120 chats and a time box of 2 seconds: a run after an interrupted first run loads every chat, and one more run adds nothing. The media pass runs after a message pass that used its full share. A chat with no timestamp costs a message request only while it has no `last_at`. The media pass asks WAHA by the plain key id. A file that cannot be written counts one try and stops the media pass for that run. A session with no account stops the sync with `waha_no_account` and keeps the stored account. An error that does not come from WAHA ends with `sync_failed`, and the log line holds no exception object. |
+| `tests/display_text_check.php` | PHP | `DisplayText::name()` strips control and bidirectional-override characters and leaves a ZWJ emoji and a Persian ZWNJ word unchanged. `DisplayText::mimeMismatch()` on the cases of the mismatch rule in *The viewer*. |
 | `tests/reader_check.php` | PHP with pdo_sqlite (use the docker image) | Chats, lid mapping, group flag, message kinds, media rows, captions, call facts, calls, skipped rows, hostile bytes passed through, the `suspicious` flag, the reader construction guard after a throw. |
 | `tests/nc_integration.sh` | Podman, curl, python3 | Full round trip in a throwaway Nextcloud. See below. |
 
 ```sh
-php -d zend.assertions=1 -d assert.exception=1 tests/crypt15_check.php
 php -d zend.assertions=1 -d assert.exception=1 tests/media_linker_check.php
+php -d zend.assertions=1 -d assert.exception=1 tests/waha_mapper_check.php
+php -d zend.assertions=1 -d assert.exception=1 tests/sync_resume_check.php
 php -d zend.assertions=1 -d assert.exception=1 tests/display_text_check.php
-podman run --rm -v "$PWD:/app:ro" -w /app php:8.3-cli \
-    php -d zend.assertions=1 -d assert.exception=1 tests/memdb_check.php
-podman run --rm -v "$PWD:/app:ro" -w /app php:8.3-cli \
-    php -d zend.assertions=1 -d assert.exception=1 tests/reader_check.php
+podman run --rm --entrypoint php -v "$PWD:/app:ro" -w /app php:8.3-cli \
+    -d zend.assertions=1 -d assert.exception=1 tests/crypt15_check.php
+podman run --rm --entrypoint php -v "$PWD:/app:ro" -w /app php:8.3-cli \
+    -d zend.assertions=1 -d assert.exception=1 tests/memdb_check.php
+podman run --rm --entrypoint php -v "$PWD:/app:ro" -w /app php:8.3-cli \
+    -d zend.assertions=1 -d assert.exception=1 tests/reader_check.php
 ./tests/nc_integration.sh
 ```
+
+`crypt15_check.php`, `memdb_check.php` and `reader_check.php` need SQLite
+with the memdb VFS and the `sqlite_dbpage` table. Run them in the
+`php:8.3-cli` image when the PHP of the host fails them. `./tests/run.sh`
+selects the image itself: it runs the three scripts in `php:8.3-cli` when a
+probe finds both features there, else in `nextcloud:34-fpm`.
 
 The test scripts use rootless podman. When `CI` is set, they use docker. Set `CTR` to use a different engine. The integration script removes its container and the container's volumes when it exits, also on Ctrl-C. Set `KEEP=1` to keep the container.
 
@@ -857,31 +949,52 @@ The integration script:
 2. Copies the app in, enables it, seeds the fixture backup and one image.
 3. Creates a source over OCS. Rejects a short key and an unknown provider.
 4. Imports. Checks the counts. Checks that a second run skips.
-5. Imports with a wrong key on a second source. Checks `lastError` and the cleared state.
+5. Imports with a wrong key on a second source. Checks that `lastError` is
+   `wrong_key`, that the state is cleared, and that no decrypted file stays
+   on disk.
 6. Checks the import state after "Import now".
 7. Reads chats, messages, search with each filter, and calls. Checks
    `hasPreview` on a linked image. Checks that NUL bytes, invalid UTF-8, an
    over-long file name and a `..` media path from the backup are cleaned.
 8. Renders the app page, the settings page and the admin page.
-9. Sets the left-click action. Checks that the app page carries it, and that
-   a `javascript:` template and an unknown action get 400.
-10. Sets the full text search switch. Checks the fallback and the 403 for a non-admin.
-11. Checks that a second user gets 404 on every read and write route of the
+9. Sets the left-click action. Checks that the app page carries it, that a
+   `javascript:` template gets 400 with `bad_click_action`, and that an
+   unknown action gets 400.
+10. Sets the user language to `de`, then to `de_DE`. Checks that the page
+    loads the `l10n/de.js` bundle, then the `l10n/de_DE.js` bundle.
+11. Sets the full text search switch. Checks the fallback and the 403 for a non-admin.
+12. Lists the unified search providers. Checks that `chat_archive_messages`
+    is there with its filters, then searches through it with a term and
+    with each filter.
+13. Imports a later backup version (the `--v2` fixture). The view toggles
+    have no stored value yet, so they are on and every row shows. Checks the
+    deleted, revoked and edited messages, the gone chat and the
+    phone-archived chat. A second forced import of the same backup adds no
+    mark and no edit row. An unchanged backup is skipped and changes no row.
+14. Turns the view toggles off and on. Checks that they filter the messages
+    route and the search route, and that the unified search still returns
+    every row.
+15. Imports the first backup again. The `missing` and gone marks clear and
+    `revoked` stays. A message reads its first text again, which gives a
+    new version in its edit history.
+16. Checks that a second user gets 404 on every read and write route of the
     first user, and sees no source of theirs.
-12. Imports the same backup as the second user. Each user sees only their
+17. Imports the same backup as the second user. Each user sees only their
     own chats and search hits. Deleting the source of the second user leaves
     the rows of the first user in place.
-13. Sets the user language to German and checks that the page loads the
-    `l10n/de.js` bundle.
-14. Moves the linked file. Checks that the pointer follows.
-15. Deletes it under each policy: `restore`, `keep` with a trash restore, `unlink`.
-16. Deletes the source. Checks the cascade.
+18. Moves the linked file. Checks that the pointer follows.
+19. Deletes it under each policy: `restore`, `keep` with a trash restore, `unlink`.
+20. Deletes the source. Checks the cascade.
 
 The integration script also runs a fake WAHA (`tests/fixtures/waha_router.php`
 under `php -S 127.0.0.1:3999` in the container). It checks that a request
-without the key gets 401. It assigns the session, runs `occ chat_archive:sync`
+without the key gets 401. A new live source without a session gets 400
+`session_required`. It assigns the session, runs `occ chat_archive:sync`
 and checks that two messages arrive and the shared key is not duplicated. A
-second sync inserts nothing (I20.9). A forced import then does not mark the
+second sync inserts nothing (I20.9). The realtime update of an open chat is
+off by default: `POST /api/chats/{id}/live` gives `live: false`. With the
+realtime switch on, the call adds a message that is missing from the
+archive one time, and the next call adds nothing. A forced import then does not mark the
 synced message `missing` and does not mark the synced chat gone (I20.2). With
 preserve on, `DELETE /settings/sources/{id}` gives 409 `preserve_on`; the
 script turns preserve off before the steps that test the delete policies.
@@ -893,15 +1006,17 @@ tests another server version.
 
 `tests/fixtures/make_fixture.py` builds `msgstore.db` and
 `msgstore.db.crypt15` with the key in `key.hex`. It needs `wa_crypt_tools`
-in `~/.venv`. The plain database is not in git.
+in `~/.venv`. The plain databases are in git.
 
 The fixture holds two chats with messages, one chat without messages, one
 lid-mapped jid, two images, one document, two calls, one message without a
 key id, and one hostile row: a body with a NUL byte and an invalid UTF-8
-byte, a 300-character file name and a media path with `..`. The document
-row carries `suspicious_content = 3`; one media row carries a name with a
-U+202E right-to-left override character. The `--old` build has no
-`suspicious_content` column, to check that an old backup still imports.
+byte, a 300-character file name and a media path with `..`. The photo row
+of message K3 carries `suspicious_content = 3` and a name with a U+202E
+right-to-left override character. The `--old` build has no
+`suspicious_content` column, to check that an old backup still imports. The
+`--v2` build is a later backup of the same phone, with a deleted, a revoked
+and an edited message, a gone chat and an archived chat.
 
 ## Lint
 
@@ -915,8 +1030,8 @@ composer lint       # phpstan level 6 with the cognitive complexity rule
 Both linters fail a function with a cognitive complexity above 15, the
 SonarCloud threshold. `phpstan.neon` and `eslint.config.js` hold the rules.
 `tests/phpstan/stubs.php` declares the three private server classes the full
-text search provider instantiates; `nextcloud/ocp` ships only the
-interfaces.
+text search provider instantiates, and the viewer event `LoadViewer`;
+`nextcloud/ocp` ships only the interfaces.
 
 ## Translations
 
@@ -930,10 +1045,12 @@ npm run l10n                 # after you add or change a string
 node scripts/l10n.mjs --check   # fails on an empty translation; part of npm run lint
 ```
 
-Shipped languages: `de` (informal) and `de_DE` (formal). Translate the new
-keys in both JSON files, then run `npm run l10n` again. Nextcloud picks `de`
-for a user with `de_DE` only through the browser language, so both files are
-needed.
+`node scripts/l10n.mjs --check` writes nothing. It only reports each missing
+or empty text and exits 1 when it finds one.
+
+Shipped languages: `de` (informal) and `de_DE` (formal). A user gets the
+file of the language in the personal settings. Translate each new key in
+both JSON files, then run `npm run l10n`.
 
 ## Deploy
 
@@ -976,7 +1093,9 @@ notes in the store.
 
 ### One-time setup
 
-1. Certificate. Put `chat_archive.csr` in a folder `chat_archive/` in a fork
+1. Certificate. Make the private key and the certificate request:
+   `openssl req -nodes -newkey rsa:4096 -keyout chat_archive.key -out chat_archive.csr -subj "/CN=chat_archive"`
+   Put `chat_archive.csr` in a folder `chat_archive/` in a fork
    of <https://github.com/nextcloud/app-certificate-requests> and open a pull
    request. After the merge, the workflow downloads
    `chat_archive/chat_archive.crt` from that repository. The private key,
@@ -1050,4 +1169,4 @@ disk, at any point, in any form.
 - PHP 8.1, `declare(strict_types=1)`, constructor promotion, attributes for routes.
 - Front end: Vue 3 options API, `@nextcloud/vue` 9 components, `t('chat_archive', …)` for every string.
 - Comments and documentation in ASD-STE100 Simplified Technical English.
-- A `ponytail:` comment marks a deliberate shortcut and names the upgrade path.
+- A comment that names a known limit also names the upgrade path.

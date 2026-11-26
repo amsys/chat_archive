@@ -26,7 +26,7 @@ class Application extends App implements IBootstrap {
 
 	public function register(IRegistrationContext $context): void {
 		$context->registerEventListener(BeforeNodeDeletedEvent::class, FileListener::class);
-		// arch: D29.2 (P2) the id before a move is readable only before it
+		// The id before a move is readable only before the move.
 		$context->registerEventListener(BeforeNodeRenamedEvent::class, FileListener::class);
 		$context->registerEventListener(NodeRenamedEvent::class, FileListener::class);
 		$context->registerEventListener(NodeCreatedEvent::class, BackupListener::class);

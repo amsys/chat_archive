@@ -25,7 +25,7 @@ use OCP\Search\SearchResultEntry;
  * same OCS route, to agent tools.
  *
  * This provider uses the SQL scan only (ArchiveStore::search()), not the
- * full text search path. It does not change ArchiveStore or ApiController.
+ * full text search path.
  */
 class MessageSearchProvider implements IFilteringProvider {
 	public function __construct(
@@ -119,15 +119,22 @@ class MessageSearchProvider implements IFilteringProvider {
 			'',
 			$this->chatName($chat),
 			$time . ': ' . $text,
-			$this->url->linkToRouteAbsolute(Application::APP_ID . '.page.index'),
+			// The app opens the chat at this message (App.vue, linkFromUrl). Ids and the time only, no text.
+			$this->url->linkToRouteAbsolute(Application::APP_ID . '.page.index', [
+				'source' => (int)$hit['sourceId'],
+				'chat' => (int)$hit['chatId'],
+				'msg' => (int)$hit['id'],
+				'at' => (int)$hit['sentAt'],
+			]),
 			'icon-comment',
 		);
 	}
 
 	/**
-	 * Copy of ApiController::chatName(), kept private here so ApiController
-	 * stays unchanged. Private chats resolve from the jid, not the stored
-	 * name, and the resolved name is cached on the row.
+	 * The same rule as ApiController::chatName(): keep the two in step.
+	 * A private chat takes its name from the address books of the user, and
+	 * the result is cached on the row. With no match, the stored name shows
+	 * when it is a name, and the number of the jid if not.
 	 * @param array<string, mixed> $chat
 	 */
 	private function chatName(array $chat): string {
@@ -139,7 +146,8 @@ class MessageSearchProvider implements IFilteringProvider {
 			$this->store->setChatDisplayName($chat['id'], $resolved ?? '');
 			$chat['displayName'] = $resolved ?? '';
 		}
-		return (string)DisplayText::name($chat['displayName'] !== '' ? $chat['displayName'] : ContactNames::fallback($chat['platformChatId']));
+		$stored = DisplayText::noName($chat['name']) ? ContactNames::fallback($chat['platformChatId']) : $chat['name'];
+		return (string)DisplayText::name($chat['displayName'] !== '' ? $chat['displayName'] : $stored);
 	}
 
 	/** Int value of a custom string filter, or null when the caller did not set it. */

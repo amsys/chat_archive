@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\ChatArchive\Source\WhatsApp;
 
+use OCA\ChatArchive\Service\ImportException;
 use OCA\ChatArchive\Source\IBackupReader;
 use PDO;
 
@@ -31,7 +32,7 @@ class MsgstoreReader implements IBackupReader {
 	private const OPTIONAL = [
 		'lid_map' => ['jid_map' => ['lid_row_id', 'jid_row_id']],
 		'media' => ['message_media' => ['message_row_id', 'file_hash', 'mime_type', 'file_size', 'media_name', 'media_caption', 'file_path']],
-		// own feature (not folded into 'media'), so an old backup without this column still gets its media rows. arch: D2.1
+		// own feature (not folded into 'media'), so an old backup without this column still gets its media rows.
 		'suspicious' => ['message_media' => ['suspicious_content']],
 		'call_facts' => ['message_call_log' => ['message_row_id', 'call_log_row_id'], 'call_log' => ['_id', 'video_call', 'duration', 'call_result']],
 		'missed_facts' => ['missed_call_logs' => ['message_row_id', 'video_call']],
@@ -48,7 +49,7 @@ class MsgstoreReader implements IBackupReader {
 	/** @var array<string, bool> canonical jid -> one of its sqlite chat rows is archived on the phone */
 	private array $phoneArchived = [];
 
-	/** arch: D1.4, D6.2 -- the caller (WhatsAppProvider) opens the connection; this reader only sets it safe. */
+	/** The caller (WhatsAppProvider) opens the connection; this reader only sets it safe. */
 	public function __construct(private PDO $db) {
 		$this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 		$this->db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
@@ -64,7 +65,7 @@ class MsgstoreReader implements IBackupReader {
 		}
 		$missing = array_filter($missing);
 		if ($missing !== []) {
-			throw new \RuntimeException('unsupported WhatsApp backup: the database has no ' . implode(', no ', $missing));
+			throw new ImportException('unsupported_backup', 'unsupported WhatsApp backup: the database has no ' . implode(', no ', $missing));
 		}
 		foreach (self::OPTIONAL as $feature => $tables) {
 			$this->has[$feature] = true;
@@ -203,7 +204,7 @@ class MsgstoreReader implements IBackupReader {
 	/**
 	 * WhatsApp's own verdict, raw. Null when the column is absent or the row
 	 * carries no value. A function of its own keeps messages() under the
-	 * cognitive complexity limit. arch: D2.1
+	 * cognitive complexity limit.
 	 */
 	private static function suspiciousValue(bool $hasSuspicious, int|string|null $raw): ?int {
 		if (!$hasSuspicious || $raw === null) {

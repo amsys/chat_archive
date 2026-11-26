@@ -1,3 +1,7 @@
+<!--
+  The file of one message: a preview or a link when the file is in
+  Nextcloud, a note when it is not, and a warning when WhatsApp flagged it.
+-->
 <template>
 	<div class="ca-media">
 		<template v-if="media.exists && media.suspicious">
@@ -55,7 +59,7 @@
 			</a>
 			<div class="ca-media__bar">
 				<span v-if="media.mimeMismatch" class="ca-media__chip" :title="mismatchTitle">
-					{{ t('chat_archive', 'Type does not match the file name') }}
+					{{ t('chat_archive', 'WhatsApp recorded a different file type') }}
 				</span>
 				<NcActions :aria-label="media.displayPath" :title="media.displayPath">
 					<NcActionLink :href="filesLink" target="_blank">
@@ -81,7 +85,7 @@
 		</template>
 		<div v-else class="ca-media__missing" dir="auto">
 			<FileHidden :size="20" />
-			<span>{{ media.fileName || media.srcPath || kind }} — {{ t('chat_archive', 'not in Nextcloud') }}</span>
+			<span>{{ media.fileName || media.srcPath || kindLabel(kind) }} — {{ t('chat_archive', 'not in Nextcloud') }}</span>
 		</div>
 		<div v-if="media.caption" class="ca-media__caption" dir="auto">
 			{{ media.caption }}
@@ -99,7 +103,7 @@ import FileHidden from 'vue-material-design-icons/FileHidden.vue'
 import Folder from 'vue-material-design-icons/Folder.vue'
 import Laptop from 'vue-material-design-icons/Laptop.vue'
 import { davUrl, filesUrl, openLocally, openMedia, previewUrl } from '../api.js'
-import { isAudio, isImage, isVideo } from '../util.js'
+import { isAudio, isImage, isVideo, kindLabel } from '../util.js'
 
 export default {
 	name: 'MediaView',
@@ -114,18 +118,18 @@ export default {
 			return filesUrl(this.media.fileId, this.media.path)
 		},
 
-		/** The mime every type branch keys on: the live file's own mime when known, else the backup's declared mime (arch: D3.2). */
+		/** The mime every type branch keys on: the live file's own mime when known, else the backup's declared mime. */
 		effectiveMime() {
 			return this.media.realMime ?? this.media.mime
 		},
 
-		/** The name shown to the user: the live file's own name first, so a spoofed backup name never wins (arch: D4.2). */
+		/** The name shown to the user: the live file's own name first, so a spoofed backup name never wins. */
 		displayName() {
 			return this.media.realName || this.media.fileName || this.media.path
 		},
 
 		mismatchTitle() {
-			return t('chat_archive', 'The name says {declared}. The file is {real}.', { declared: this.media.mime, real: this.media.realMime })
+			return t('chat_archive', 'WhatsApp recorded {declared}. Nextcloud sees {real}.', { declared: this.media.mime, real: this.media.realMime })
 		},
 	},
 
@@ -138,15 +142,16 @@ export default {
 		isImage,
 		isVideo,
 		isAudio,
+		kindLabel,
 
 		/**
 		 * Asks before a flagged file leaves the server, with a dialog in the
-		 * app's own style (arch: D3.2). Each button carries its own outcome; a
+		 * app's own style. Each button carries its own outcome; a
 		 * close with neither button starts no download.
 		 */
 		confirmDownload() {
 			getDialogBuilder(t('chat_archive', 'Download suspicious file'))
-				.setText(t('chat_archive', 'WhatsApp flagged this file as suspicious. Download it only if you trust the source.'))
+				.setText(t('chat_archive', 'WhatsApp flagged this file as suspicious. Download it only if you trust the sender.'))
 				.setSeverity('warning')
 				.addButton({ label: t('chat_archive', 'Cancel'), callback: () => {} })
 				.addButton({

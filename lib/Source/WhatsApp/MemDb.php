@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\ChatArchive\Source\WhatsApp;
 
+use OCA\ChatArchive\Service\ImportException;
 use PDO;
 use PDOStatement;
 use RuntimeException;
@@ -96,7 +97,7 @@ final class MemDb {
 	public function finish(): PDO {
 		try {
 			if ($this->loader === null || $this->buf !== '' || $this->next - 1 !== $this->pages) {
-				throw new RuntimeException('truncated backup');
+				throw new ImportException('corrupt_backup', 'truncated backup');
 			}
 			$this->put(1, $this->first);
 			$this->loader->exec('COMMIT');
@@ -125,29 +126,29 @@ final class MemDb {
 	/** Reads the header, then makes an empty database of the same page size and page count. */
 	private function open(#[\SensitiveParameter] string $head): void {
 		if (!str_starts_with($head, "SQLite format 3\0")) {
-			throw new RuntimeException('unsupported WhatsApp backup: not an SQLite database');
+			throw new ImportException('unsupported_backup', 'unsupported WhatsApp backup: not an SQLite database');
 		}
 		$ps = unpack('n', $head, 16)[1];
 		$ps = $ps === 1 ? 65536 : $ps;
 		if ($ps < 512 || $ps > 65536 || ($ps & ($ps - 1)) !== 0) {
-			throw new RuntimeException("unsupported WhatsApp backup: page size $ps");
+			throw new ImportException('unsupported_backup', "unsupported WhatsApp backup: page size $ps");
 		}
 		if (substr($head, 24, 4) !== substr($head, 92, 4)) {
-			throw new RuntimeException('unsupported WhatsApp backup: the header page count is not valid');
+			throw new ImportException('unsupported_backup', 'unsupported WhatsApp backup: the header page count is not valid');
 		}
 		$n = unpack('N', $head, 28)[1];
 		if ($n < 2) {
-			throw new RuntimeException("unsupported WhatsApp backup: $n pages");
+			throw new ImportException('unsupported_backup', "unsupported WhatsApp backup: $n pages");
 		}
 		$bytes = $n * $ps;
 		if ($bytes > self::MAX_BYTES) {
 			$mib = intdiv($bytes + self::MIB - 1, self::MIB);
-			throw new RuntimeException("decrypted backup is $mib MiB; the in-memory import supports up to 1024 MiB");
+			throw new ImportException('backup_too_large', "decrypted backup is $mib MiB; the in-memory import supports up to 1024 MiB");
 		}
 		if ($bytes > $this->maxPlainBytes) {
 			$mib = intdiv($bytes + self::MIB - 1, self::MIB);
 			$capMib = intdiv($this->maxPlainBytes + self::MIB - 1, self::MIB);
-			throw new RuntimeException("decrypted backup is $mib MiB; the encrypted source allows at most $capMib MiB");
+			throw new ImportException('backup_too_large', "decrypted backup is $mib MiB; the encrypted source allows at most $capMib MiB");
 		}
 		$this->pageSize = $ps;
 		$this->pages = $n;
@@ -168,8 +169,9 @@ final class MemDb {
 	/**
 	 * Adds pages until the page count is $n, and never more. One zeroblob of
 	 * m pages needs at most m overflow pages and 2 pages for a b-tree split,
-	 * so each large step stops 4 pages short or more. A step is at most STEP
- * bytes, so a large database needs some steps. The last pages come
+	 * so each large step asks for 4 pages fewer than are missing and stops at
+	 * least 2 pages short. A step is at most STEP
+	 * bytes, so a large database needs some steps. The last pages come
 	 * from CREATE TABLE, one root page each.
 	 */
 	private function grow(PDO $db, int $n, int $ps): void {
@@ -196,7 +198,7 @@ final class MemDb {
 		$off = 0;
 		while ($len - $off >= $ps) {
 			if ($this->next > $this->pages) {
-				throw new RuntimeException('unsupported WhatsApp backup: more data than the header page count');
+				throw new ImportException('unsupported_backup', 'unsupported WhatsApp backup: more data than the header page count');
 			}
 			$page = substr($this->buf, $off, $ps);
 			if ($this->next === 1) {

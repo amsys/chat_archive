@@ -7,15 +7,39 @@ namespace OCA\ChatArchive\Service;
 /**
  * Cleans text on its way out to a caller. Stored values do not change; this
  * is the one place that cleans a name before it is shown.
- * arch: D4.1, D4.2, D4.3, D4.4
  */
 final class DisplayText {
 	/**
 	 * Control characters and bidi-override marks that can hide or reorder a
-	 * name (arch: D4.1). Keeps U+200C (ZWNJ) and U+200D (ZWJ): they join
+	 * name. Keeps U+200C (ZWNJ) and U+200D (ZWJ): they join
 	 * letters and emoji and carry no override. Keeps language tag characters.
 	 */
 	public const STRIP = '/[\p{Cc}\x{061C}\x{200B}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{206F}\x{FEFF}\x{FFF9}-\x{FFFB}]/u';
+
+	/**
+	 * True when a stored chat name gives no name: it is empty, or it holds
+	 * only a phone number or an id (digits, spaces and + ( ) - .).
+	 */
+	public static function noName(?string $s): bool {
+		return $s === null || preg_match('/^[\d\s+().-]*$/', $s) === 1;
+	}
+
+	/**
+	 * The chat name to store after a backup import. A backup names a private
+	 * chat by its number: that number does not replace a stored name. A
+	 * group has no number, so a group name of digits is a real name.
+	 */
+	public static function backupName(?string $stored, ?string $new, bool $isGroup = false): ?string {
+		if ($new === null || (!$isGroup && self::noName($new) && !self::noName($stored))) {
+			return $stored;
+		}
+		return $new;
+	}
+
+	/** The chat name to store after a live sync: a new name fills a row that has none. */
+	public static function syncName(?string $stored, ?string $new): ?string {
+		return self::noName($stored) && !self::noName($new) ? $new : $stored;
+	}
 
 	/**
 	 * Strip the marks of self::STRIP from a name shown to a user. mb_scrub
@@ -37,7 +61,7 @@ final class DisplayText {
 	 * noise inside one kind does not trigger (audio/ogg vs
 	 * audio/ogg;codecs=opus; application/zip vs
 	 * application/x-zip-compressed). A real mime of application/octet-stream
-	 * (the file cache could not tell) never triggers. arch: D4.3
+	 * (the file cache could not tell) never triggers.
 	 */
 	public static function mimeMismatch(?string $declared, ?string $real): bool {
 		if ($declared === null || $real === null) {

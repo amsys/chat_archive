@@ -1,7 +1,6 @@
 <!--
   Dialog to add a source (three steps), to edit one, or to turn on its
   live sync. All errors show in a note inside the dialog.
-  arch: D27.1, D27.2
 -->
 <template>
 	<NcDialog
@@ -41,7 +40,7 @@
 						v-model="session"
 						:options="live.sessions"
 						:clearable="false"
-						:inputLabel="t('chat_archive', 'Live sync session')" />
+						:inputLabel="t('chat_archive', 'WhatsApp session for live sync')" />
 					<NcCheckboxRadioSwitch v-model="tos" type="checkbox">
 						{{ t('chat_archive', 'I understand the risk for my WhatsApp number.') }}
 					</NcCheckboxRadioSwitch>
@@ -81,7 +80,7 @@
 				<NcPasswordField
 					v-if="mode === 'backup' && needsSecret"
 					v-model="secret"
-					:label="t('chat_archive', '64-character backup key')" />
+					:label="t('chat_archive', 'Backup key (64 characters)')" />
 				<div class="ca-dlg__row">
 					<NcTextField v-model="folder" :label="folderLabel" :helperText="folderHelp" />
 					<NcButton variant="secondary" @click="pickFolder">
@@ -132,7 +131,7 @@
 				<NcPasswordField
 					v-if="mode === 'backup' && needsSecret"
 					v-model="secret"
-					:label="source.hasSecret ? t('chat_archive', 'Backup key (leave empty to keep the stored one)') : t('chat_archive', '64-character backup key')" />
+					:label="source.hasSecret ? t('chat_archive', 'Backup key (leave empty to keep the stored one)') : t('chat_archive', 'Backup key (64 characters)')" />
 				<NcSelect
 					v-if="!preserve"
 					v-model="onDelete"
@@ -151,7 +150,7 @@
 					v-model="session"
 					:options="live.sessions"
 					:clearable="false"
-					:inputLabel="t('chat_archive', 'Live sync session')" />
+					:inputLabel="t('chat_archive', 'WhatsApp session for live sync')" />
 				<NcCheckboxRadioSwitch v-model="tos" type="checkbox">
 					{{ t('chat_archive', 'I understand the risk for my WhatsApp number.') }}
 				</NcCheckboxRadioSwitch>
@@ -259,7 +258,7 @@ export default {
 			return !!this.provider?.needsSecret
 		},
 
-		// arch: D27.2
+		// The same translated string as in the admin settings
 		warning() {
 			return t('chat_archive', 'WAHA is an unofficial WhatsApp client. Its use is against the WhatsApp Terms of Service, and WhatsApp can restrict or ban a number that uses one. Chat Archive only reads; it never sends. In daily use it reads the few messages since the last sync. The first sync of a live-only source loads the history and, when the administrator allows it, its media in a short time, which can look like automation. Start from a phone backup when you can.')
 		},
@@ -355,7 +354,7 @@ export default {
 			await this.run(save)
 		},
 
-		/** Looks for the backup file and format-checks the key (arch: D26.1). */
+		/** Looks for the backup file and format-checks the key. */
 		async runProbe() {
 			this.probing = true
 			this.probe = null
@@ -390,21 +389,26 @@ export default {
 		/**
 		 * Creates the source once, then queues its first import or sync.
 		 * A second click after a failed queue does not create a second source.
+		 * On that second click it first saves the current fields to the
+		 * source, so a change after Back takes effect. The server keeps the
+		 * mode of the source as it was created.
 		 */
 		async add() {
+			const live = this.mode === 'live'
+			const fields = {
+				provider: this.provider?.id,
+				label: this.label,
+				folder: this.folder,
+				secret: live ? null : this.secret || null,
+				onDelete: this.onDelete.id,
+				mode: this.mode,
+				syncSession: live ? this.session : null,
+				tos: live && this.tos,
+			}
 			if (this.createdId === null) {
-				const live = this.mode === 'live'
-				const created = await api.createSource({
-					provider: this.provider?.id,
-					label: this.label,
-					folder: this.folder,
-					secret: live ? null : this.secret || null,
-					onDelete: this.onDelete.id,
-					mode: this.mode,
-					syncSession: live ? this.session : null,
-					tos: live && this.tos,
-				})
-				this.createdId = created.id
+				this.createdId = (await api.createSource(fields)).id
+			} else {
+				await api.updateSource(this.createdId, fields)
 			}
 			await api.importSource(this.createdId)
 		},

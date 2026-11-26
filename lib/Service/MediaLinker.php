@@ -116,7 +116,7 @@ class MediaLinker {
 	}
 
 	/**
-	 * The owner rule (I6.1), as one pure function so a unit check covers it
+	 * The owner rule, as one pure function so a unit check covers it
 	 * without a Folder/Node mock. $folderOwner is the source folder's owner
 	 * id, or null when the storage reports none. $sourceUserId is the
 	 * source's configured user, the fallback expected owner used only when

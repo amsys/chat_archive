@@ -1,3 +1,9 @@
+<!--
+  The messages of one chat, paged in both directions as the user scrolls,
+  with a jump to a date and the realtime poll of an open chat.
+  A chat that opens at its newest end stays at the last message while images
+  and other content change the height, until the reader scrolls up.
+-->
 <template>
 	<div class="ca-chat">
 		<div class="ca-chat__head">
@@ -29,28 +35,30 @@
 			tabindex="0"
 			:aria-label="t('chat_archive', 'Messages')"
 			@scroll="onScroll">
-			<div v-if="loading && messages.length === 0" class="ca-chat__note">
-				<NcLoadingIcon :size="20" />
-			</div>
-			<div v-if="loading && loadingMode === 'prepend'" class="ca-chat__spinner">
-				<NcLoadingIcon :size="20" />
-			</div>
-			<template v-for="(m, i) in messages" :key="m.id">
-				<div v-if="i === 0 || dayKey(m.sentAt) !== dayKey(messages[i - 1].sentAt)" class="ca-day">
-					{{ fmtRelDate(m.sentAt) }}
+			<div ref="content" class="ca-chat__content">
+				<div v-if="loading && messages.length === 0" class="ca-chat__note">
+					<NcLoadingIcon :size="20" />
 				</div>
-				<MessageBubble
-					:message="m"
-					:senderName="m.sender ? senders[m.sender] : null"
-					:showSender="chat.isGroup"
-					:sameAsPrevious="i > 0 && sameGroup(m, messages[i - 1])"
-					:highlight="highlightId === m.id"
-					:data-id="m.id" />
-			</template>
-			<div v-if="loading && loadingMode === 'append'" class="ca-chat__spinner">
-				<NcLoadingIcon :size="20" />
+				<div v-if="loading && loadingMode === 'prepend'" class="ca-chat__spinner">
+					<NcLoadingIcon :size="20" />
+				</div>
+				<template v-for="(m, i) in messages" :key="m.id">
+					<div v-if="i === 0 || dayKey(m.sentAt) !== dayKey(messages[i - 1].sentAt)" class="ca-day">
+						{{ fmtRelDate(m.sentAt) }}
+					</div>
+					<MessageBubble
+						:message="m"
+						:senderName="m.sender ? senders[m.sender] : null"
+						:showSender="chat.isGroup"
+						:sameAsPrevious="i > 0 && sameGroup(m, messages[i - 1])"
+						:highlight="highlightId === m.id"
+						:data-id="m.id" />
+				</template>
+				<div v-if="loading && loadingMode === 'append'" class="ca-chat__spinner">
+					<NcLoadingIcon :size="20" />
+				</div>
+				<NcEmptyContent v-if="messages.length === 0 && !loading" :name="t('chat_archive', 'No messages')" />
 			</div>
-			<NcEmptyContent v-if="messages.length === 0 && !loading" :name="t('chat_archive', 'No messages')" />
 		</div>
 	</div>
 </template>
@@ -93,6 +101,7 @@ export default {
 			olderDone: false,
 			newerDone: false,
 			highlightId: null,
+			pinned: false, // the view follows growth at the bottom of the newest page
 			seq: 0, // only the newest request may write to messages
 		}
 	},
@@ -122,6 +131,11 @@ export default {
 	},
 
 	mounted() {
+		this.lastTop = 0
+		this.jumped = false // true: the next scroll event comes from a jump, not from the reader
+		this.resizeObserver = new ResizeObserver(this.onResize)
+		this.resizeObserver.observe(this.$refs.content)
+		this.resizeObserver.observe(this.$refs.scroller)
 		this.reset()
 		if (this.live) {
 			this.liveTimer = setTimeout(this.liveTick, LIVE_MS)
@@ -129,9 +143,12 @@ export default {
 	},
 
 	beforeUnmount() {
+		// a request still in flight must not touch the closed chat
+		this.seq++
 		clearTimeout(this.highlightTimer)
 		clearTimeout(this.liveTimer)
 		this.liveTimer = null
+		this.resizeObserver.disconnect()
 	},
 
 	methods: {
@@ -151,6 +168,8 @@ export default {
 		},
 
 		async reset() {
+			this.pinned = false
+			this.jumped = false
 			this.messages = []
 			this.olderDone = this.newerDone = false
 			if (this.jumpTo) {
@@ -165,15 +184,17 @@ export default {
 						return // a newer request superseded this one
 					}
 				}
-				this.$nextTick(() => this.scrollToId(this.jumpTo.id))
+				this.$nextTick(() => {
+					this.jumped = true
+					this.scrollToId(this.jumpTo.id)
+				})
 			} else {
 				if (!await this.load({}, 'replace')) {
 					return // a newer request superseded this one
 				}
 				this.newerDone = true
-				this.$nextTick(() => {
-					this.$refs.scroller.scrollTop = this.$refs.scroller.scrollHeight
-				})
+				this.pinned = true
+				this.$nextTick(() => this.toBottom())
 			}
 		},
 
@@ -181,6 +202,7 @@ export default {
 			if (!value) {
 				return
 			}
+			this.pinned = false
 			const at = new Date(value + 'T00:00:00').getTime()
 			this.messages = []
 			this.olderDone = this.newerDone = false
@@ -189,6 +211,7 @@ export default {
 			}
 			this.newerDone = this.messages.length < PAGE
 			this.$nextTick(() => {
+				this.jumped = true
 				this.$refs.scroller.scrollTop = 0
 			})
 		},
@@ -221,11 +244,13 @@ export default {
 					this.messages = rows
 				} else if (mode === 'prepend') {
 					const el = this.$refs.scroller
-					const before = el.scrollHeight
+					// Keep the distance to the bottom. The spinner is at the top, so it
+					// does not move the view. A reader who follows the bottom stays there.
+					const fromBottom = el.scrollHeight - el.scrollTop
 					this.messages = rows.concat(this.messages)
 					this.olderDone = rows.length < PAGE
 					this.$nextTick(() => {
-						el.scrollTop += el.scrollHeight - before
+						el.scrollTop = el.scrollHeight - (this.pinned ? el.clientHeight : fromBottom)
 					})
 				} else {
 					this.messages = this.messages.concat(rows)
@@ -256,10 +281,10 @@ export default {
 				if (!document.hidden && this.newerDone && !this.loading) {
 					const r = await api.liveChat(this.chat.id)
 					again = r.live !== false
-					if (again && this.liveTimer !== null && r.lastAt !== this.liveAt) {
-						// the first step loads too: the timed sync can have added rows since the page opened
+					// The first step loads too: the timed sync can have added rows since the page opened.
+					// A load that did not run leaves liveAt as it is, so the next step tries again.
+					if (again && this.liveTimer !== null && r.lastAt !== this.liveAt && await this.loadNew()) {
 						this.liveAt = r.lastAt
-						await this.loadNew()
 					}
 				}
 			} catch {
@@ -270,23 +295,65 @@ export default {
 			}
 		},
 
-		/** Append the messages after the last one shown. A reader at the bottom stays at the bottom. */
+		/**
+		 * Append the messages after the last one shown. A reader who follows
+		 * the bottom, or who is at the bottom before the load, stays at the
+		 * bottom. Any other reader does not move.
+		 *
+		 * @return {boolean} true when the load ran to its end
+		 */
 		async loadNew() {
-			const el = this.$refs.scroller
-			const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+			const stick = this.pinned || this.atBottom()
 			const last = this.messages[this.messages.length - 1]
 			const done = last
 				? await this.load({ afterAt: last.sentAt, afterId: last.id }, 'append')
 				: await this.load({}, 'replace')
-			if (done && atBottom) {
-				this.$nextTick(() => {
-					el.scrollTop = el.scrollHeight
-				})
+			if (done && stick) {
+				this.pinned = true
+				this.$nextTick(() => this.toBottom())
 			}
+			return done
+		},
+
+		/** @return {boolean} true when the scroller shows its last pixel */
+		atBottom() {
+			const el = this.$refs.scroller
+			return el.scrollHeight - el.scrollTop - el.clientHeight <= 1
+		},
+
+		toBottom() {
+			const el = this.$refs.scroller
+			el.scrollTop = el.scrollHeight
+			this.lastTop = el.scrollTop
+		},
+
+		/** Keep the last message in view while the content or the scroller changes size. */
+		onResize() {
+			if (this.pinned) {
+				this.toBottom()
+			}
+		},
+
+		/**
+		 * Set the follow flag at the bottom of the newest page and clear it
+		 * when the reader moves up. The scroll event of a jump does not count.
+		 *
+		 * @param {HTMLElement} el the scroller
+		 */
+		trackPin(el) {
+			if (this.jumped) {
+				this.jumped = false
+			} else if (this.newerDone && this.atBottom()) {
+				this.pinned = true
+			} else if (el.scrollTop < this.lastTop) {
+				this.pinned = false
+			}
+			this.lastTop = el.scrollTop
 		},
 
 		onScroll() {
 			const el = this.$refs.scroller
+			this.trackPin(el)
 			if (this.messages.length === 0) {
 				return
 			}
@@ -347,6 +414,10 @@ export default {
 	gap: 8px;
 	align-items: center;
 	color: var(--color-text-maxcontrast);
+}
+/* Firefox cuts the year off in a narrower date field. */
+.ca-chat__jump input {
+	min-width: 11em;
 }
 .ca-chat__status {
 	margin: 0;

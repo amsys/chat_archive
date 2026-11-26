@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build the WhatsApp-shaped test fixtures.
 
-Writes tests/fixtures/msgstore.db.crypt15: a tiny SQLite
-database encrypted with the test key in tests/fixtures/key.hex.
+Writes tests/fixtures/msgstore.db, a tiny SQLite database, then
+msgstore.db.crypt15, the same database encrypted with the test key, and
+key.hex, that key.
 Needs ~/.venv with wa_crypt_tools (waencrypt).
 With --old, build only tests/fixtures/msgstore_old.db (see below).
 With --v2, build only tests/fixtures/msgstore_v2.db and msgstore_v2.db.crypt15:
@@ -13,7 +14,7 @@ Chats in DATA:
   chat B = 23000002-1600000000@g.us (sqlite chat 2, "Family group"), archived = 1
 
 The default and --v2 builds add message_media.suspicious_content after DATA
-(the --old build does not get the column, D7.1/I2.2). The photo media row of
+(the --old build does not get the column). The photo media row of
 message K3 (chat A, so it survives in both builds) gets suspicious_content=3
 and a media_name with a U+202E right-to-left override character.
 

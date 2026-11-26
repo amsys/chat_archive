@@ -13,7 +13,7 @@ class ArchiveStore {
 	public const PAGE = 100;
 	public const SEARCH_LIMIT = 50;
 	public const INDEX_PAGE = 1000;
-	/** Message kinds whose body can change after an edit on the phone. arch: D3.2 */
+	/** Message kinds whose body can change after an edit on the phone. */
 	public const EDITABLE = ['text', 'image', 'video', 'document', 'gif'];
 	/** Largest id list in one IN (...) clause. */
 	private const CHUNK = 500;
@@ -32,10 +32,8 @@ class ArchiveStore {
 	/**
 	 * Insert or update a chat; returns its id. The chat is in the backup, so
 	 * gone_at is cleared. $phoneArchived null means the backup cannot tell:
-	 * phone_archived then stays as it is (D6.I4). The backup has the chat,
+	 * phone_archived then stays as it is. The backup has the chat,
 	 * so in_backup turns true.
-	 * arch: D3.5, D5.2
-	 * arch: D22.1
 	 */
 	public function upsertChat(int $sourceId, string $platformChatId, #[\SensitiveParameter] ?string $name, bool $isGroup, ?bool $phoneArchived = null): int {
 		$platformChatId = (string)self::text($platformChatId, 255);
@@ -46,7 +44,9 @@ class ArchiveStore {
 			->andWhere($q->expr()->eq('platform_chat_id', $q->createNamedParameter($platformChatId)));
 		$row = $q->executeQuery()->fetch();
 		if ($row) {
-			if ($name !== null && $name !== $row['name']) {
+			// A backup names a private chat by its number. That number must not replace a name from a sync.
+			$name = DisplayText::backupName($row['name'], $name, $isGroup);
+			if ($name !== $row['name']) {
 				$u = $this->db->getQueryBuilder();
 				$u->update('chatarchive_chat')->set('name', $u->createNamedParameter($name))
 					->where($u->expr()->eq('id', $u->createNamedParameter((int)$row['id'], IQueryBuilder::PARAM_INT)))
@@ -80,10 +80,10 @@ class ArchiveStore {
 
 	/**
 	 * The live sync side of upsertChat(). A new chat gets in_backup = false.
-	 * On a stored chat only a NULL name changes: the sync never touches
-	 * gone_at or phone_archived (I20.1).
+	 * On a stored chat the name changes only when the row has no name (NULL,
+	 * empty or a number) and WAHA gives one: the sync never touches gone_at
+	 * or phone_archived (I20.1).
 	 * @return array{id:int, last_at:?int}
-	 * arch: D22.1
 	 */
 	public function syncChat(int $sourceId, string $platformChatId, #[\SensitiveParameter] ?string $name, bool $isGroup): array {
 		$platformChatId = (string)self::text($platformChatId, 255);
@@ -94,11 +94,12 @@ class ArchiveStore {
 			->andWhere($q->expr()->eq('platform_chat_id', $q->createNamedParameter($platformChatId)));
 		$row = $q->executeQuery()->fetch();
 		if ($row) {
-			// Only a NULL name changes; a NULL $name leaves it NULL.
+			// The WHERE clause lets the statement change the row only when the name is new.
+			$name = DisplayText::syncName($row['name'], $name);
 			$u = $this->db->getQueryBuilder();
 			$u->update('chatarchive_chat')->set('name', $u->createNamedParameter($name))
 				->where($u->expr()->eq('id', $u->createNamedParameter((int)$row['id'], IQueryBuilder::PARAM_INT)))
-				->andWhere($u->expr()->isNull('name'))
+				->andWhere($u->expr()->neq($u->createFunction("COALESCE(name, '')"), $u->createNamedParameter($name ?? '')))
 				->executeStatement();
 			return ['id' => (int)$row['id'], 'last_at' => self::intOrNull($row['last_at'])];
 		}
@@ -116,13 +117,12 @@ class ArchiveStore {
 	/**
 	 * A database row value of an in_backup column. NULL counts as true: a
 	 * database that did not fill the default holds only backup rows.
-	 * arch: D20.2
 	 */
 	private static function inBackup(mixed $v): bool {
 		return (bool)($v ?? true);
 	}
 
-	/** Write phone_archived only when the backup has the fact (D6.I4). */
+	/** Write phone_archived only when the backup has the fact. */
 	private function setPhoneArchived(int $chatId, ?bool $phoneArchived): void {
 		if ($phoneArchived === null) {
 			return;
@@ -135,13 +135,11 @@ class ArchiveStore {
 
 	/**
 	 * Mark the chats of a source that the newest complete backup did not have.
-	 * Call only after the whole chat loop finished without a throw (D6.I7).
+	 * Call only after the whole chat loop finished without a throw.
 	 * A chat that is already gone keeps its first gone_at. A chat that only
 	 * the live sync has seen (in_backup false) is never marked (I20.2).
 	 * @param string[] $seenPlatformChatIds raw reader chat ids; scrubbed here the same way upsertChat() stores them
 	 * @return int chats newly marked
-	 * arch: D3.5, D5.2
-	 * arch: D22.1
 	 */
 	public function markGoneChats(int $sourceId, array $seenPlatformChatIds, int $now): int {
 		$seen = array_map(static fn ($id) => (string)self::text((string)$id, 255), $seenPlatformChatIds);
@@ -188,10 +186,8 @@ class ArchiveStore {
 
 	/**
 	 * The stored messages of a chat, for the per-import compare. Rows stored
-	 * before 0.1.6 have no seen_hash: backfillHashes() writes it first.
+	 * before 0.2.0 have no seen_hash: backfillHashes() writes it first.
 	 * @return array<string, array{id:int, kind:string, deleted:?string, hash:string, in_backup:bool}> keyed by platform_msg_id
-	 * arch: D4.3, D5.1
-	 * arch: D22.1
 	 */
 	public function existingMessages(int $chatId): array {
 		$this->backfillHashes($chatId);
@@ -213,8 +209,8 @@ class ArchiveStore {
 
 	/**
 	 * Write seen_hash for the rows of a chat that have none, from the stored
-	 * body. Such rows were stored before 0.1.6 and have no edits, so the
-	 * stored body is the last seen version (D4.3). Reads body only for these
+	 * body. Such rows were stored before 0.2.0 and have no edits, so the
+	 * stored body is the last seen version. Reads body only for these
 	 * rows, once in the life of the archive.
 	 */
 	private function backfillHashes(int $chatId): void {
@@ -236,16 +232,14 @@ class ArchiveStore {
 	 * sha1 of the scrubbed body, so raw backup bytes and their stored form
 	 * give the same hash. NULL has its own value: text() removes NUL bytes,
 	 * so no scrubbed body can equal it.
-	 * arch: D3.1
 	 */
 	public static function bodyHash(#[\SensitiveParameter] ?string $body): string {
 		return sha1(self::text($body) ?? "\0null");
 	}
 
 	/**
-	 * A message the backup now shows as deleted for everyone. Permanent (D6.I5).
+	 * A message the backup now shows as deleted for everyone. Permanent.
 	 * A row that is already revoked keeps its first deleted_at.
-	 * arch: D3.2, D5.2
 	 */
 	public function markRevoked(int $messageId, int $now): void {
 		$u = $this->db->getQueryBuilder();
@@ -262,7 +256,6 @@ class ArchiveStore {
 
 	/**
 	 * A 'missing' message is in the backup again. A 'revoked' row does not change.
-	 * arch: D3.2, D5.2, D6.I5
 	 */
 	public function clearMissing(int $messageId): void {
 		$u = $this->db->getQueryBuilder();
@@ -276,10 +269,9 @@ class ArchiveStore {
 
 	/**
 	 * Keep a new version of an edited message. The message body and kind do
-	 * not change (D6.I1): the version goes to chatarchive_edit, and only
+	 * not change: the version goes to chatarchive_edit, and only
 	 * seen_hash and edited_at change on the message row.
 	 * @param string $hash bodyHash($body)
-	 * arch: D3.2, D5.2
 	 */
 	public function recordEdit(int $sourceId, int $messageId, #[\SensitiveParameter] ?string $body, string $hash, int $now): void {
 		$i = $this->db->getQueryBuilder();
@@ -298,11 +290,38 @@ class ArchiveStore {
 	}
 
 	/**
+	 * Set the last seen version of a message without an edit row.
+	 * @param string $hash bodyHash() of that version
+	 */
+	public function setSeenHash(int $messageId, string $hash): void {
+		$u = $this->db->getQueryBuilder();
+		$u->update('chatarchive_message')
+			->set('seen_hash', $u->createNamedParameter($hash))
+			->where($u->expr()->eq('id', $u->createNamedParameter($messageId, IQueryBuilder::PARAM_INT)))
+			->executeStatement();
+	}
+
+	/**
+	 * The bodyHash() of the caption and of the file name of a message's media
+	 * row. Empty when the message has no media row or both are null.
+	 * @return list<string>
+	 */
+	public function mediaTextHashes(int $messageId): array {
+		$q = $this->db->getQueryBuilder();
+		$q->select('caption', 'file_name')->from('chatarchive_media')
+			->where($q->expr()->eq('message_id', $q->createNamedParameter($messageId, IQueryBuilder::PARAM_INT)));
+		$r = $q->executeQuery()->fetch();
+		if ($r === false) {
+			return [];
+		}
+		return array_values(array_map(self::bodyHash(...), array_filter([$r['caption'], $r['file_name']], 'is_string')));
+	}
+
+	/**
 	 * Mark messages that the backup no longer has. Only rows with no mark
 	 * change: a 'revoked' row stays 'revoked'.
 	 * @param int[] $messageIds
 	 * @return int rows newly marked
-	 * arch: D3.4, D5.2
 	 */
 	public function markMissing(array $messageIds, int $now): int {
 		return $this->updateIds('chatarchive_message', $messageIds, 'deleted',
@@ -314,7 +333,6 @@ class ArchiveStore {
 	 * The backup now has these messages: set in_backup true, one UPDATE per
 	 * chunk of ids.
 	 * @param int[] $messageIds
-	 * arch: D22.1
 	 */
 	public function setInBackup(array $messageIds): void {
 		self::eachChunk($messageIds, function (array $chunk): void {
@@ -331,8 +349,6 @@ class ArchiveStore {
 	 * deleted = 'revoked' with deleted_at = sent_at. $inBackup is false for a
 	 * row that only the live sync has seen.
 	 * @param array<string, mixed> $m a reader message row
-	 * arch: D3.1, D3.3
-	 * arch: D22.1
 	 */
 	public function insertMessage(int $sourceId, int $chatId, #[\SensitiveParameter] array $m, bool $inBackup = true): int {
 		$call = $m['call'] ?? null;
@@ -360,7 +376,7 @@ class ArchiveStore {
 		return $id;
 	}
 
-	/** @param array<string, mixed> $md a reader media row. arch: D2.2 */
+	/** @param array<string, mixed> $md a reader media row. */
 	public function insertMedia(int $sourceId, int $messageId, #[\SensitiveParameter] array $md): void {
 		$q = $this->db->getQueryBuilder();
 		$q->insert('chatarchive_media')->values([
@@ -378,8 +394,7 @@ class ArchiveStore {
 
 	/**
 	 * Set the flag on a stored media row unless it is already flagged. Sticky:
-	 * once set above 0, no path here clears or lowers it (I2.1).
-	 * arch: D2.2, D2.3
+	 * once set above 0, no path here clears or lowers it.
 	 */
 	public function flagMedia(int $messageId, int $value): void {
 		$u = $this->db->getQueryBuilder();
@@ -401,7 +416,6 @@ class ArchiveStore {
 	 * not write suspicious on a stored row: the import sets it through
 	 * flagMedia() for every stored key.
 	 * @param array<string, mixed> $md a reader media row
-	 * arch: D22.1
 	 */
 	public function fillMedia(int $sourceId, int $messageId, #[\SensitiveParameter] array $md): void {
 		$q = $this->db->getQueryBuilder();
@@ -433,7 +447,6 @@ class ArchiveStore {
 	 * Rows with fewer failed fetches come first, so a file that WAHA cannot
 	 * give does not hold back the files behind it. Then newest sent_at first.
 	 * @return list<array{id:int, message_id:int, platform_msg_id:string, platform_chat_id:string, from_me:bool, mime:?string, file_name:?string, sent_at:int}>
-	 * arch: D22.1
 	 */
 	public function pendingSyncMedia(int $sourceId, int $limit): array {
 		$q = $this->db->getQueryBuilder();
@@ -466,7 +479,6 @@ class ArchiveStore {
 
 	/**
 	 * One more failed media fetch from WAHA. A NULL counter counts as 0.
-	 * arch: D22.1
 	 */
 	public function bumpSyncTries(int $mediaId): void {
 		$u = $this->db->getQueryBuilder();
@@ -480,7 +492,6 @@ class ArchiveStore {
 	 * The live sync stored the media file: point the row at it. A NULL $size
 	 * keeps the stored size.
 	 * @param string $srcPath path relative to the source folder
-	 * arch: D22.1
 	 */
 	public function setMediaStored(int $mediaId, int $fileId, string $srcPath, ?int $size): void {
 		$u = $this->db->getQueryBuilder();
@@ -557,6 +568,11 @@ class ArchiveStore {
 			->executeStatement();
 	}
 
+	/**
+	 * display_name caches the address book name of a private chat: null = not
+	 * looked up yet, '' = looked up, no match. `name` is what the backup or
+	 * the live sync gave.
+	 */
 	public function setChatDisplayName(int $chatId, #[\SensitiveParameter] ?string $name): void {
 		$u = $this->db->getQueryBuilder();
 		$u->update('chatarchive_chat')->set('display_name', $u->createNamedParameter($name))
@@ -596,7 +612,6 @@ class ArchiveStore {
 	 * Media rows (with their source) that point at any of the given file ids.
 	 * @param int[] $fileIds
 	 * @return array<int, array{id:int, file_id:int, src_path:?string, source_id:int, user_id:string, folder:string, on_delete:string, suspicious:?int}>
-	 * arch: D2.2
 	 */
 	public function mediaByFileIds(array $fileIds): array {
 		$out = [];
@@ -712,11 +727,10 @@ class ArchiveStore {
 	 * that neither skips nor repeats rows.
 	 *
 	 * $hideDeleted drops rows marked 'missing' or 'revoked'. Only the in-app
-	 * message page sets it, from the user's toggle (D6.I3).
+	 * message page sets it, from the user's toggle.
 	 *
 	 * @param array{before?: array{int,int}, after?: array{int,int}, at?: int} $cursor
 	 * @return array<int, array<string, mixed>>
-	 * arch: D5.3
 	 */
 	public function messages(int $chatId, array $cursor, bool $hideDeleted = false): array {
 		$q = $this->db->getQueryBuilder();
@@ -766,7 +780,7 @@ class ArchiveStore {
 	 * Add latestBody to each row: the body of the newest chatarchive_edit
 	 * row for an edited message, null for a message with no edit. One
 	 * query for the whole page, then the newest row per message is picked
-	 * in PHP (arch: U4).
+	 * in PHP.
 	 * @param array<int, array<string, mixed>> $rows rows with 'id' and 'editedAt'
 	 * @return array<int, array<string, mixed>>
 	 */
@@ -802,7 +816,6 @@ class ArchiveStore {
 	 * The versions of an edited message after the original, oldest first.
 	 * The original is the message body.
 	 * @return list<array{seenAt:int, body:?string}>
-	 * arch: D5.3
 	 */
 	public function edits(int $messageId): array {
 		$q = $this->db->getQueryBuilder();
@@ -853,7 +866,7 @@ class ArchiveStore {
 	 * Search hits by message id, for the FullTextSearch path. Ids are
 	 * re-authorized against the caller's sources here: a search-platform id
 	 * is never trusted on its own. Result order follows $ids (best match
-	 * first), not SQL. The id list goes to SQL in chunks of 500 (P12).
+	 * first), not SQL. The id list goes to SQL in chunks of 500.
 	 * @param int[] $sourceIds
 	 * @param int[] $ids
 	 * @param array{chat?:int, from?:int, to?:int, kind?:string, who?:string, hide_deleted?:bool, hide_archived?:bool} $filters
@@ -864,7 +877,7 @@ class ArchiveStore {
 			return [];
 		}
 		$rows = [];
-		// arch: D22.1
+		// One query per chunk of ids keeps each IN (...) list short.
 		self::eachChunk($ids, function (array $chunk) use ($sourceIds, $filters, &$rows): void {
 			$q = $this->searchQuery($sourceIds, $filters);
 			$q->andWhere($q->expr()->in('m.id', $q->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
@@ -878,8 +891,7 @@ class ArchiveStore {
 	/**
 	 * Message rows joined with their media row, restricted to $sourceIds and the filters both search paths share.
 	 * hide_deleted and hide_archived have no default: a key that is absent
-	 * or false filters nothing. Only ApiController sets them (D6.I3).
-	 * arch: D5.3
+	 * or false filters nothing. Only ApiController sets them.
 	 * @param int[] $sourceIds
 	 * @param array{chat?:int, from?:int, to?:int, kind?:string, who?:string, hide_deleted?:bool, hide_archived?:bool} $filters
 	 */
@@ -963,7 +975,6 @@ class ArchiveStore {
 	 * Each row also has the caption and file name of its media row; hasMedia
 	 * is true when the message has a media row.
 	 * @return array<int, array{id:int, chatId:int, chatName:string, sentAt:int, body:?string, caption:?string, fileName:?string, hasMedia:bool}>
-	 * arch: D29.4
 	 */
 	public function messagesForIndex(int $sourceId, int $limit, int $offset): array {
 		$q = $this->db->getQueryBuilder();
@@ -987,7 +998,6 @@ class ArchiveStore {
 	 * One message for the FullTextSearch orphan-cleanup path, with the owning
 	 * user and the media fields of messagesForIndex().
 	 * @return array{id:int, chatId:int, chatName:string, sentAt:int, body:?string, sourceId:int, userId:string, caption:?string, fileName:?string, hasMedia:bool}|null
-	 * arch: D29.4
 	 */
 	public function messageForIndex(int $messageId): ?array {
 		$q = $this->db->getQueryBuilder();
@@ -1030,7 +1040,6 @@ class ArchiveStore {
 	/**
 	 * @param int[] $messageIds
 	 * @return array<int, array<string, mixed>> keyed by message id
-	 * arch: D2.2
 	 */
 	public function mediaForMessages(array $messageIds): array {
 		if ($messageIds === []) {

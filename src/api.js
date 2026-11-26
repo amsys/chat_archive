@@ -1,3 +1,4 @@
+// Calls to the OCS API of the app, the view preferences, and the URLs and actions that open a file.
 import { getCurrentUser } from '@nextcloud/auth'
 import axios from '@nextcloud/axios'
 import { showError } from '@nextcloud/dialogs'
@@ -22,11 +23,11 @@ export const api = {
 	updateSource: (id, s) => axios.put(url(`/settings/sources/${id}`), s).then(data),
 	deleteSource: (id) => axios.delete(url(`/settings/sources/${id}`)).then(data),
 	importSource: (id) => axios.post(url(`/settings/sources/${id}/import`)).then(data),
-	// arch: D26.3
+	// An empty secret goes to the server as null.
 	probe: (folder, secret) => axios.post(url('/settings/probe'), { folder, secret: secret || null }).then(data),
 	setPreserve: (preserve) => axios.put(url('/settings/preserve'), { preserve }).then(data),
 
-	// admin routes (arch: D26.2)
+	// admin routes
 	adminStatus: () => axios.get(url('/admin/status')).then(data),
 	saveWaha: (cfg) => axios.put(url('/admin/waha'), cfg).then(data),
 	testWaha: () => axios.post(url('/admin/waha/test')).then(data),
@@ -38,7 +39,7 @@ export const api = {
 
 /**
  * The user's view toggles at page load: show deleted messages and gone
- * chats, show chats archived on the phone. Both default on (arch: D7.2).
+ * chats, show chats archived on the phone. Both default on.
  *
  * @return {{showDeleted: boolean, showArchived: boolean}}
  */
@@ -112,7 +113,7 @@ export async function openLocally(path) {
  * nc: the desktop client. custom: a URL template; {path} is the encoded path without its leading slash.
  * A file WhatsApp flagged as suspicious never opens this way: the caller in
  * MediaView already guards its own click handlers, and this is the second
- * guard for any other caller (arch: D3.2, I3.1, I3.2).
+ * guard for any other caller.
  *
  * @param {object} media a media row with `path`, `mime` and `suspicious`
  */

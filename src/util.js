@@ -1,3 +1,4 @@
+// Shared helpers: date, time and size formats, call and kind labels, media type tests and the import poll.
 import { translate as t } from '@nextcloud/l10n'
 
 /** @param {number} ms unix ms; @return {string} short local time */
@@ -28,6 +29,20 @@ export function fmtRelDate(ms) {
 		return new Date(ms).toLocaleDateString([], { weekday: 'short' })
 	}
 	return fmtDate(ms)
+}
+
+/**
+ * The date of a chat row in the navigation. A day label cannot order the
+ * chats of one day, so a time of today shows as the clock time.
+ *
+ * @param {?number} ms unix ms, or null for "no messages yet"
+ * @return {string} the local time for today, else the fmtRelDate label
+ */
+export function fmtListDate(ms) {
+	if (ms !== null && dayKey(ms) === dayKey(Date.now())) {
+		return fmtTime(ms)
+	}
+	return fmtRelDate(ms)
 }
 
 /**
@@ -73,6 +88,38 @@ export function callLabel(message) {
 	return label.replace('{duration}', fmtDuration(c.durationS ?? 0))
 }
 
+const KIND_LABELS = {
+	system: t('chat_archive', 'System message'),
+	revoked: t('chat_archive', 'This message was deleted'),
+	sticker: t('chat_archive', 'Sticker'),
+	vcard: t('chat_archive', 'Contact card'),
+	vcard_array: t('chat_archive', 'Contact cards'),
+	location: t('chat_archive', 'Location'),
+	live_location: t('chat_archive', 'Live location'),
+	poll: t('chat_archive', 'Poll'),
+	group_invite: t('chat_archive', 'Group invite'),
+	view_once_image: t('chat_archive', 'View once photo'),
+	view_once_video: t('chat_archive', 'View once video'),
+	unsupported: t('chat_archive', 'Unsupported message'),
+	image: t('chat_archive', 'Photo'),
+	video: t('chat_archive', 'Video'),
+	audio: t('chat_archive', 'Audio'),
+	document: t('chat_archive', 'Document'),
+	gif: t('chat_archive', 'GIF'),
+	video_note: t('chat_archive', 'Video message'),
+}
+
+/**
+ * Gives the label of a message kind in the user's language. A kind with no
+ * label, such as `button_reply` or `type_42`, gets the general label "Message".
+ *
+ * @param {?string} kind the kind of a message row
+ * @return {string}
+ */
+export function kindLabel(kind) {
+	return KIND_LABELS[kind] ?? t('chat_archive', 'Message')
+}
+
 /** @param {?string} mime a mime type; @return {boolean} */
 export const isImage = (mime) => /^image\//.test(mime ?? '')
 /** @param {?string} mime a mime type; @return {boolean} */
@@ -85,7 +132,7 @@ export const isAudio = (mime) => /^audio\//.test(mime ?? '')
  * every 15 s for as long as it returns true (an import is queued or running).
  * kick() restarts the cycle after "Import now"; stop() on unmount.
  * A kick() while a tick is in flight is not lost: one more tick runs as
- * soon as that tick ends (arch: D26.3).
+ * soon as that tick ends.
  *
  * @param {() => Promise<boolean>} refresh reloads the sources; resolves true while an import is pending
  * @return {{ kick: () => void, stop: () => void }}

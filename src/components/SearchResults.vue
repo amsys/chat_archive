@@ -1,3 +1,8 @@
+<!--
+  Search over all chats of a source: the filters (chat, type, sender,
+  time) and the list of hits. A click on a hit opens its chat at that
+  message.
+-->
 <template>
 	<div class="ca-search">
 		<div class="ca-search__filters">
@@ -90,7 +95,7 @@
 						<span v-if="h.deleted" class="ca-search__chip" :title="deletedLabel(h)">{{ t('chat_archive', 'Deleted') }}</span>
 						<span v-if="h.editedAt" class="ca-search__chip">{{ t('chat_archive', 'Edited') }}</span>
 						<!-- The flag stays: no request goes out for a suspicious file
-						     from this row (arch: D3.3, I3.1) — no thumbnail, and no
+						     from this row — no thumbnail, and no
 						     `open` handler that could reach it either. -->
 						<span v-if="h.media && h.media.suspicious" class="ca-search__chip">{{ t('chat_archive', 'Suspicious file') }}</span>
 						<!-- A still preview, not MediaView: that is a link plus a <video
@@ -104,7 +109,15 @@
 								:src="previewUrl(h.media.fileId, 256)"
 								alt=""
 								loading="lazy">
-							{{ mediaName(h.media) }}
+							<template v-if="!mediaText(h)">
+								{{ mediaName(h.media) }}
+							</template>
+							<template v-for="(p, i) in previewParts(h)" v-else :key="i">
+								<mark v-if="p.hit">{{ p.text }}</mark>
+								<template v-else>
+									{{ p.text }}
+								</template>
+							</template>
 						</span>
 						<template v-for="(p, i) in previewParts(h)" v-else :key="i">
 							<mark v-if="p.hit">{{ p.text }}</mark>
@@ -134,7 +147,7 @@ import { translate as t } from '@nextcloud/l10n'
 import { NcButton, NcEmptyContent, NcListItem, NcLoadingIcon, NcSelect } from '@nextcloud/vue'
 import Magnify from 'vue-material-design-icons/Magnify.vue'
 import { api, previewUrl } from '../api.js'
-import { callLabel, fmtDateTime } from '../util.js'
+import { callLabel, fmtDateTime, kindLabel } from '../util.js'
 
 const DAY = 86400000
 const ALL = { id: null, label: t('chat_archive', 'All sources') }
@@ -220,7 +233,7 @@ export default {
 	watch: {
 		params: { handler: 'run', immediate: true },
 		chatOptions(list) {
-			if (this.f.chat && !list.includes(this.f.chat)) {
+			if (this.f.chat && !list.some((c) => c.id === this.f.chat.id)) {
 				this.f.chat = null
 			}
 		},
@@ -279,7 +292,15 @@ export default {
 		},
 
 		previewText(h) {
-			return (h.call && callLabel(h)) || (h.latestBody ?? h.body) || h.media?.caption || h.kind
+			return (h.call && callLabel(h)) || (h.latestBody ?? h.body) || h.media?.caption || kindLabel(h.kind)
+		},
+
+		/**
+		 * @param {object} h a search hit with media
+		 * @return {string} the text of the hit or the caption of its file, or an empty string
+		 */
+		mediaText(h) {
+			return (h.latestBody ?? h.body) || h.media.caption || ''
 		},
 
 		/**
@@ -362,6 +383,12 @@ export default {
 }
 .ca-search ul {
 	list-style: none;
+}
+/* A row with a photo is higher than two text lines: the library gives the
+   row a fixed height, so the next rows covered it. */
+.ca-search :deep(.list-item__anchor) {
+	height: auto;
+	min-height: var(--list-item-height);
 }
 .ca-search__more {
 	padding: 8px 0;

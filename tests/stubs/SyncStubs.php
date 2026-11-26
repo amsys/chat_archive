@@ -9,7 +9,6 @@ declare(strict_types=1);
 // app classes; in the scanned paths they would shadow the real ones.
 //
 // The file returns a function: fn(int $chats): ChatArchiveTest\SyncWorld.
-// arch: D25.1
 
 namespace OCP\Files {
 	class NotFoundException extends \Exception {
@@ -221,6 +220,10 @@ namespace OCA\ChatArchive\Waha {
 		public array $messageCalls = [];
 		/** @var list<array{string, string}> chat id and message id of each message() call */
 		public array $mediaCalls = [];
+		/** The account id that session() gives. Null: WAHA gives no account. */
+		public ?string $me = '23099999@c.us';
+		/** When set, chatsOverview() throws it. */
+		public ?\Throwable $overviewError = null;
 
 		public function __construct(
 			public int $count,
@@ -229,7 +232,7 @@ namespace OCA\ChatArchive\Waha {
 
 		/** @return array{status:string, me:?string} */
 		public function session(string $name): array {
-			return ['status' => 'WORKING', 'me' => '23099999@c.us'];
+			return ['status' => 'WORKING', 'me' => $this->me];
 		}
 
 		private function chatId(int $i): string {
@@ -255,6 +258,9 @@ namespace OCA\ChatArchive\Waha {
 		/** @return list<array<string, mixed>> */
 		public function chatsOverview(string $session, int $limit, int $offset): array {
 			$this->overviewCalls[] = $offset;
+			if ($this->overviewError !== null) {
+				throw $this->overviewError;
+			}
 			$out = [];
 			for ($i = $offset + 1; $i <= min($this->count, $offset + $limit); $i++) {
 				$entry = ['id' => $this->chatId($i), 'name' => null];
@@ -313,7 +319,7 @@ namespace ChatArchiveTest {
 	use OCP\Files\NotPermittedException;
 	use Psr\Log\LoggerInterface;
 
-	require_once __DIR__ . '/../../lib/Service/ImportRunningException.php';
+	require_once __DIR__ . '/../../lib/Service/SourceBusyException.php';
 	require_once __DIR__ . '/../../lib/Waha/WahaException.php';
 	require_once __DIR__ . '/../../lib/Waha/WahaMapper.php';
 	require_once __DIR__ . '/../../lib/Service/SyncService.php';
@@ -431,6 +437,7 @@ namespace ChatArchiveTest {
 				'media_asked' => $this->client->mediaCalls,
 				'media' => $media,
 				'error' => $this->source->syncError,
+				'me' => $this->source->syncMe,
 				'state' => $this->source->importState,
 				'warnings' => $this->log->warnings,
 			];

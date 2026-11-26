@@ -1,3 +1,8 @@
+<!--
+  Main page of the app: the navigation with the search box and the chat
+  list, and the content area with one chat, the call list or the search
+  results.
+-->
 <template>
 	<NcContent appName="chat_archive">
 		<NcAppNavigation>
@@ -63,7 +68,7 @@
 				<li v-for="s in importing" :key="'imp' + s.id" class="ca-nav-note ca-nav-importing">
 					<NcLoadingIcon :size="16" />
 					<span v-if="s.importState === 'queued'">{{ t('chat_archive', 'Import queued: {label}', { label: s.label }, { escape: false, sanitize: false }) }}</span>
-					<span v-else>{{ t('chat_archive', 'Importing {label} since {when}', { label: s.label, when: fmtTime(s.importSince * 1000) }, { escape: false, sanitize: false }) }}</span>
+					<span v-else>{{ t('chat_archive', 'Importing {label} since {when}', { label: s.label, when: fmtDateTime(s.importSince * 1000) }, { escape: false, sanitize: false }) }}</span>
 				</li>
 				<NcListItem
 					v-if="query.trim()"
@@ -79,6 +84,7 @@
 					v-if="source && !query.trim()"
 					:name="t('chat_archive', 'Calls')"
 					:active="view === 'calls'"
+					:oneLine="true"
 					@click="showCalls">
 					<template #icon>
 						<Phone :size="20" />
@@ -91,7 +97,7 @@
 					:name="c.name"
 					:oneLine="true"
 					:class="{ 'ca-chat-muted': chatMuted(c) }"
-					:details="fmtRelDate(c.lastAt)"
+					:details="fmtListDate(c.lastAt)"
 					:linkAriaLabel="chatRowLabel(c)"
 					:active="view === 'chat' && chat && chat.id === c.id"
 					@click="openChat(c)">
@@ -158,7 +164,7 @@
 				v-if="!source"
 				class="ca-empty"
 				:name="t('chat_archive', 'No source configured')"
-				:description="t('chat_archive', 'Add a backup folder in your personal settings.')">
+				:description="t('chat_archive', 'Add a source in your personal settings.')">
 				<template #icon>
 					<MessageText />
 				</template>
@@ -243,10 +249,34 @@ import CallList from './components/CallList.vue'
 import MessageList from './components/MessageList.vue'
 import SearchResults from './components/SearchResults.vue'
 import { api, viewPrefs } from './api.js'
-import { fmtDate, fmtRelDate, fmtTime, pollImports } from './util.js'
+import { fmtDate, fmtDateTime, fmtListDate, pollImports } from './util.js'
 
-/* ponytail: the list caps rendered rows instead of virtual scrolling; the filter narrows it. */
+/* The list caps the rendered rows and uses no virtual scrolling. The filter narrows the list. */
 const PAGE = 150
+/* The timed sync adds messages every few minutes. The list reloads in this interval while the tab shows. */
+const REFRESH_MS = 60000
+
+/**
+ * The message that a result of the Nextcloud search links to, from the
+ * parameters source, chat, msg and at (MessageSearchProvider::toEntry).
+ * Removes them from the address, so a reload opens the start page.
+ *
+ * @return {?{sourceId: number, chatId: number, id: number, sentAt: number}} null when a parameter is missing
+ */
+function linkFromUrl() {
+	const url = new URL(window.location.href)
+	const p = url.searchParams
+	const n = (k) => (/^\d+$/.test(p.get(k) ?? '') ? Number(p.get(k)) : null)
+	const link = { sourceId: n('source'), chatId: n('chat'), id: n('msg'), sentAt: n('at') }
+	if (Object.values(link).includes(null)) {
+		return null
+	}
+	for (const k of ['source', 'chat', 'msg', 'at']) {
+		p.delete(k)
+	}
+	window.history.replaceState(window.history.state, '', url)
+	return link
+}
 
 export default {
 	name: 'App',
@@ -284,11 +314,13 @@ export default {
 
 	data() {
 		const sources = loadState('chat_archive', 'sources', [])
+		const link = linkFromUrl()
 		return {
 			sources,
 			// the admin switch for realtime updates of an open chat
 			realtime: loadState('chat_archive', 'realtime', false),
-			source: sources[0] ?? null,
+			source: sources.find((s) => s.id === link?.sourceId) ?? sources[0] ?? null,
+			link,
 			chats: [],
 			chat: null,
 			view: 'none',
@@ -401,7 +433,7 @@ export default {
 		this.poll = pollImports(async () => {
 			const was = this.importing.length > 0
 			this.sources = (await api.settings()).sources
-			// arch: D30.1 V4: the replaced source objects must not leave `source` stale
+			// The replaced source objects must not leave `source` stale.
 			const next = this.sources.find((s) => s.id === this.source?.id) ?? this.sources[0] ?? null
 			if (next !== this.source) {
 				// the same source as a new object must not reset the open view
@@ -411,7 +443,7 @@ export default {
 			if (was && this.importing.length === 0) {
 				showSuccess(t('chat_archive', 'Import finished'))
 				this.loadChats(true)
-				this.prefsSeq++ // arch: D30.1 V5: the open chat loads what the import added
+				this.prefsSeq++ // the open chat loads what the import added
 			}
 			return this.importing.length > 0
 		})
@@ -424,18 +456,53 @@ export default {
 			}
 		})
 		document.addEventListener('keydown', this.onKeydown)
+		this.refreshTimer = setInterval(this.refreshChats, REFRESH_MS)
+		document.addEventListener('visibilitychange', this.onVisible)
+		if (this.link) {
+			this.openLink(this.link)
+		}
 	},
 
 	beforeUnmount() {
 		this.poll.stop()
 		this.observer.disconnect()
 		document.removeEventListener('keydown', this.onKeydown)
+		clearInterval(this.refreshTimer)
+		document.removeEventListener('visibilitychange', this.onVisible)
 	},
 
 	methods: {
 		t,
-		fmtRelDate,
-		fmtTime,
+		fmtDateTime,
+		fmtListDate,
+
+		/**
+		 * Reload the chat list in the background, so that a chat with new
+		 * messages moves up. A hidden tab asks nothing. A failure shows no
+		 * error: the next step asks again. This reload does not take a new
+		 * seq, so it never cancels a loadChats(); a loadChats() that starts
+		 * while it runs cancels it.
+		 */
+		async refreshChats() {
+			if (document.hidden || !this.source) {
+				return
+			}
+			const mine = this.seq
+			try {
+				const c = await api.chats(this.source.id)
+				if (mine === this.seq) {
+					this.chats = c
+				}
+			} catch {
+				// the next step asks again
+			}
+		},
+
+		onVisible() {
+			if (!document.hidden) {
+				this.refreshChats()
+			}
+		},
 
 		/**
 		 * Keep the focus where it is when the user presses the clear button.
@@ -575,8 +642,8 @@ export default {
 		 */
 		chatRowLabel(c) {
 			const base = c.lastAt
-				? t('chat_archive', '{name}, {n} messages, last message {date}', { name: c.name, n: c.msgCount, date: fmtDate(c.lastAt) }, { escape: false, sanitize: false })
-				: t('chat_archive', '{name}, {n} messages', { name: c.name, n: c.msgCount }, { escape: false, sanitize: false })
+				? t('chat_archive', '{name}, messages: {n}, last message {date}', { name: c.name, n: c.msgCount, date: fmtDate(c.lastAt) }, { escape: false, sanitize: false })
+				: t('chat_archive', '{name}, messages: {n}', { name: c.name, n: c.msgCount }, { escape: false, sanitize: false })
 			const marker = this.chatMarkerText(c)
 			return marker ? `${base}, ${marker}` : base
 		},
@@ -679,15 +746,15 @@ export default {
 				this.view = 'calls'
 			} catch {
 				if (mine === this.callsSeq) {
-					showError(t('chat_archive', 'Could not load the call log'))
+					showError(t('chat_archive', 'Could not load the calls'))
 				}
 			}
 		},
 
 		/**
-		 * Open the chat of a call, around the time of the call. No message id
-		 * is known, so MessageList centres on the timestamp and skips its
-		 * highlight.
+		 * Open the chat of a call at the time of the call. No message id is
+		 * known, so MessageList loads from that time and highlights nothing:
+		 * the call is the first row in view.
 		 *
 		 * @param {object} call the chat to open and the start time of the call
 		 * @param {object} call.chat the chat row
@@ -724,6 +791,28 @@ export default {
 			this.chat = c
 			this.jumpTo = { at: hit.sentAt, id: hit.id }
 			this.fromSearch = true
+			this.view = 'chat'
+		},
+
+		/**
+		 * Open the chat of a link from the Nextcloud search at its message.
+		 * The source watcher loads the chats of the linked source when the
+		 * app starts. Nothing opens when the user opened another view first,
+		 * or when the chat is not in the archive.
+		 *
+		 * @param {{sourceId: number, chatId: number, id: number, sentAt: number}} link from linkFromUrl()
+		 */
+		async openLink(link) {
+			if (!await this.chatsReady || this.source?.id !== link.sourceId || this.view !== 'none') {
+				return
+			}
+			const c = this.chats.find((x) => x.id === link.chatId)
+			if (!c) {
+				return
+			}
+			this.chat = c
+			this.jumpTo = { at: link.sentAt, id: link.id }
+			this.fromSearch = false
 			this.view = 'chat'
 		},
 

@@ -11,6 +11,36 @@ are the date of the release that contains them.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-26
+
+### Fixed
+
+- The chat list did not reload while the page stayed open, so chats with
+  new messages kept their old place. It now reloads every minute while
+  the tab shows, and when the tab shows again.
+- A chat with a message of today shows the clock time instead of
+  "Today", so the order of today's chats is visible.
+- A photo or a document that the live sync stored first got a false
+  "Edited" mark at the next backup import. The sync keeps the caption or
+  the file name in the media row, and the backup gives the same text as the
+  message text. The import now takes that text as the first version. The
+  upgrade removes the false marks: a media message with no text and one
+  edit that is equal to its caption or file name.
+- A deleted photo, video or file is now dimmed like a deleted text.
+- A result of the Nextcloud search opened the start page of the app. It
+  now opens the chat at that message.
+- A new message of a live chat did not show when it came in while older
+  messages loaded. The next step now loads it.
+- A chat that you close while a page of messages loads no longer shows
+  "Could not load messages".
+- A group that gets a name of digits only, for example "2019", kept its
+  old name after a backup import.
+- The call list opened slowly in an archive with thousands of calls. It
+  now shows 200 calls and adds more while you scroll. "Jump to date" and
+  the filters still use all calls.
+
+## [0.2.0] - 2026-11-25
+
 ### Added
 
 - An opt-in, read-only live sync through a WAHA server. The administrator
@@ -62,8 +92,8 @@ are the date of the release that contains them.
   gone; a chat archived on the phone is marked phone-archived, when the
   backup reports the WhatsApp `archived` flag (a backup without it imports
   as before, with the mark left unset).
-- Two view preferences, on by default: "Show deleted messages and chats"
-  and "Show chats archived on the phone", set through
+- Two view preferences, on by default: "Deleted" and "Archived on the
+  phone" in the group "Show" of the chat list menu, set through
   `PUT /settings/view`. They filter only the in-app message page and the
   in-app search box; the Nextcloud unified search and full text search are
   unchanged.
@@ -78,6 +108,16 @@ are the date of the release that contains them.
 - `Service\ClickAction` now stores `click_action` and `click_template`
   through `OCP\Config\IUserConfig` instead of the older `OCP\IConfig`. A
   value stored before this change still reads.
+- An open chat starts at the last message and stays there while images
+  load. It follows new messages while you are at the end of the chat.
+- A failed import shows a clear text in the language of the user, not the
+  English exception text.
+- Each JSON line of `occ chat_archive:sync` now names the source.
+- Saving a source refuses a folder that you do not own, for example a
+  folder that another user shares with you (`folder_not_found`).
+- For a live source, `occ chat_archive:import` prints the line
+  `<user> [<id>] <label> (<folder>): skipped, live source`, not the JSON line
+  `{"source":ID,"skipped":"live"}`.
 
 ### Fixed
 
@@ -87,10 +127,10 @@ are the date of the release that contains them.
 - A search with the full text index on returned nothing when the index hit
   ids and the filters removed all of them. The plain scan now runs then.
 - Viewer fixes: texts with placeholders no longer escape twice, the call row
-  is read with its peer and time, "Refresh names" shows the success toast
-  only after success, the selected source survives a reload, an import that
-  ends reloads the open chat, a failed date jump stops, and a page append
-  skips a hit already in the list.
+  is read with its peer and time, "Refresh contact names" shows the success
+  toast only after success, the selected source survives a reload, an import
+  that ends reloads the open chat, a failed date jump stops, and a page
+  append skips a hit already in the list.
 - Lint leftovers in `tests/fixtures/make_fixture.py`, `tests/run.sh`,
   `tests/nc_integration.sh` and `scripts/pack.sh`.
 - Deleting a source now removes its documents from the full text index. It
@@ -104,6 +144,22 @@ are the date of the release that contains them.
   missing table or column. A backup without a core table (`jid`, `chat`,
   `message`) fails with an error on the source row that names the missing
   table or column.
+- A private chat whose number is in no address book now shows the name that
+  WhatsApp holds for it, when the source has live sync. A later backup
+  import does not put the number back. The Nextcloud unified search uses the
+  same name as the app.
+- A missed call in the call list was almost invisible on Nextcloud 32 and
+  later: light red text on a white page. It now uses the error text colour.
+- Firefox cut the year off in the "Jump to date" field.
+- A search result with a photo no longer covers the next rows.
+- The result filter of the calls has a new value "No answer" for an outgoing
+  call that the other person did not answer. "Missed" now shows only
+  incoming calls.
+- A search result of a file shows the caption, not only the file name.
+- The chat filter of the search no longer clears when the chat list loads
+  again.
+- `node scripts/l10n.mjs --check` writes no file. It only reports the keys
+  that have no German text.
 
 ### Removed
 

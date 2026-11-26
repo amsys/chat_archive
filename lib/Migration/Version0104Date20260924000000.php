@@ -12,7 +12,6 @@ use OCP\Migration\SimpleMigrationStep;
 
 /**
  * Phone-archived chats, gone chats, deleted messages and an edit history.
- * arch: D1.1, D1.2, D1.3
  */
 class Version0104Date20260924000000 extends SimpleMigrationStep {
 	/** @param array<string, mixed> $options */

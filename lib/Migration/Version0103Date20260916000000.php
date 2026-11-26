@@ -10,7 +10,10 @@ use OCP\BackgroundJob\IJobList;
 use OCP\Migration\IOutput;
 use OCP\Migration\SimpleMigrationStep;
 
-/** Re-add the ImportJob row, so upgrade resets it to time_sensitive=1. */
+/**
+ * An older release stored ImportJob as not time-sensitive. Remove the job and
+ * add it again, so that it gets the default: time-sensitive.
+ */
 class Version0103Date20260916000000 extends SimpleMigrationStep {
 	public function __construct(
 		private IJobList $jobList,

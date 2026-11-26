@@ -10,12 +10,10 @@ use OCP\Config\IUserConfig;
 /**
  * Per-user toggles for the in-app message page and in-app search: show
  * deleted messages and gone chats, show chats archived on the phone. Both
- * default ON, so a user with no stored value sees everything (D6.I9).
+ * default ON, so a user with no stored value sees everything.
  *
- * These toggles do not reach unified search or full text search (D6.I3):
+ * These toggles do not reach unified search or full text search:
  * only ApiController reads them.
- *
- * arch: D7.1, D7.2
  */
 class ViewPrefs {
 	public function __construct(

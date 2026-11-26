@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace OCA\ChatArchive\Command;
 
 use OCA\ChatArchive\Db\SourceMapper;
-use OCA\ChatArchive\Service\ImportRunningException;
+use OCA\ChatArchive\Service\SourceBusyException;
 use OCA\ChatArchive\Service\SyncService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-/** arch: D25.2 - run the live sync by hand; one JSON line per source. */
+/** Run the live sync by hand; one JSON line per source. */
 class Sync extends Command {
 	public function __construct(
 		private SourceMapper $sources,
@@ -41,13 +41,13 @@ class Sync extends Command {
 				$stats = $this->sync->run($source);
 				$error = $source->getSyncError();
 				if ($error !== null) {
-					$output->writeln(json_encode(['error' => $error]));
+					$output->writeln(json_encode(['source' => $source->getId(), 'error' => $error]));
 					$rc = 1;
 				} else {
-					$output->writeln(json_encode($stats));
+					$output->writeln(json_encode(['source' => $source->getId()] + $stats));
 				}
-			} catch (ImportRunningException) {
-				$output->writeln(json_encode(['error' => 'running']));
+			} catch (SourceBusyException) {
+				$output->writeln(json_encode(['source' => $source->getId(), 'error' => 'running']));
 				$rc = 1;
 			}
 		}

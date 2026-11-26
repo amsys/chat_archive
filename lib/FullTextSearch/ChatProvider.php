@@ -83,7 +83,8 @@ class ChatProvider implements IFullTextSearchProvider {
 		$counts = $this->store->messageCounts($sourceIds);
 		$chunks = [];
 		foreach ($counts as $sourceId => $count) {
-			// ponytail: OFFSET paging, keyset by id if a source ever passes ~1M messages
+			// OFFSET paging is enough here. When a source passes about 1M messages,
+			// change to keyset paging by id.
 			for ($page = 0; $page * ArchiveStore::INDEX_PAGE < $count; $page++) {
 				$chunks[] = $sourceId . ':' . $page;
 			}
@@ -113,7 +114,11 @@ class ChatProvider implements IFullTextSearchProvider {
 		return $documents;
 	}
 
-	/** Archived messages are immutable; only a contact-name refresh can stale a title. */
+	/**
+	 * The indexed text (first body, caption, file name) does not change after
+	 * the insert. A later rename of the chat does not index the title again:
+	 * a known limit.
+	 */
 	public function isDocumentUpToDate(IIndexDocument $document): bool {
 		return true;
 	}
@@ -152,7 +157,6 @@ class ChatProvider implements IFullTextSearchProvider {
 
 	/**
 	 * Body, media caption and media file name, one per line.
-	 * arch: D29.4
 	 * @param array<string, mixed> $row
 	 */
 	private function content(array $row): string {

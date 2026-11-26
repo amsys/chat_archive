@@ -26,12 +26,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: ESLint
-        run: npx eslint .
-
-      - name: Translations
-        run: node scripts/l10n.mjs --check
-
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
@@ -41,17 +35,10 @@ jobs:
       - name: Install php packages
         run: composer install --no-interaction --no-progress
 
-      - name: PHPStan
-        run: composer lint
-
-      - name: Crypt15 check
-        run: php -d zend.assertions=1 -d assert.exception=1 tests/crypt15_check.php
-
-      - name: Media linker check
-        run: php -d zend.assertions=1 -d assert.exception=1 tests/media_linker_check.php
-
-      - name: Reader check
-        run: php -d zend.assertions=1 -d assert.exception=1 tests/reader_check.php
+      # tests/run.sh runs ESLint, the translation check, PHPStan and all php
+      # checks. It runs crypt15, memdb and reader in a PHP image through docker.
+      - name: Lint, translations, PHPStan and PHP checks
+        run: SKIP_INTEGRATION=1 ./tests/run.sh
 
   integration:
     name: Integration test (Nextcloud ${{ matrix.nextcloud }})
@@ -59,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nextcloud: ['32', '34', '35']
+        nextcloud: ['32', '33', '34', '35']
     steps:
       - uses: actions/checkout@v4
 

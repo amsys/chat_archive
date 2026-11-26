@@ -1,3 +1,4 @@
+// eslint rules: the Nextcloud JavaScript set and the sonarjs checks.
 import { recommendedJavascript } from '@nextcloud/eslint-config'
 import sonarjs from 'eslint-plugin-sonarjs'
 

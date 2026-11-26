@@ -18,6 +18,12 @@ with.
 The files stay yours and stay where the phone put them. You can move, rename
 or sort them into other folders, and the chat still opens them.
 
+![A group chat with a photo, next to the chat list](docs/screenshots/chat.png)
+
+| Search across all chats | Every photo, from every chat | The call history |
+|---|---|---|
+| ![Search results for one word from three chats](docs/screenshots/search.png) | ![The photo filter lists photos from all chats](docs/screenshots/photos.png) | ![The call list with a missed call](docs/screenshots/calls.png) |
+
 ## Why this exists
 
 I needed one thing the phone does not give you: every message from one date,
@@ -37,9 +43,10 @@ chats on a server you control, so you can find that address, invoice or
 photo from three years ago.
 
 Chat Archive is **not a WhatsApp client**. It does not send messages. An
-administrator can allow an opt-in, read-only live sync through WAHA; it has
-a ban risk. See [docs/roadmap.md](docs/roadmap.md) and the
-[user guide](docs/USER-GUIDE.md).
+administrator can allow an opt-in, read-only live sync through WAHA; it puts
+the WhatsApp number at risk. Read the warning in the
+[user guide](docs/USER-GUIDE.md#live-sync-waha) first. The
+[roadmap](docs/roadmap.md) gives the reasons for this design.
 
 ## Features
 
@@ -54,14 +61,15 @@ a ban risk. See [docs/roadmap.md](docs/roadmap.md) and the
 - **Calls**: voice and video call history with duration and result.
 - **Contact names** from your Nextcloud address books, so a number shows as
   a name.
-- **Automatic import** every 6 hours, or on demand with one click or one
+- **Automatic import** on a schedule (see
+  [Import](docs/USER-GUIDE.md#import)), or on demand with one click or one
   `occ` command. Only new messages are added, so re-runs are cheap.
 - **Delete policies**: decide per source what happens when you delete a
   linked file elsewhere in Nextcloud.
 - **Live sync** (opt-in, read-only, through WAHA): new messages arrive
   between two backups. The administrator allows it per server.
-- **Preserve switch**: on by default. It copies a moved linked file back to its
-  place when you delete it, and blocks the removal of a source.
+- **Preserve switch**: on by default. It keeps the archive complete; see
+  [Preserve the archive](docs/USER-GUIDE.md#preserve-the-archive).
 - **More than one source**: WhatsApp and WhatsApp Business side by side.
   The importer is built for other platforms later.
 - **Unified search**: the Nextcloud search box finds your messages through
@@ -72,10 +80,16 @@ a ban risk. See [docs/roadmap.md](docs/roadmap.md) and the
 ## Requirements
 
 - Nextcloud 32 to 35
-- PHP 8.1 or later with the `pdo_sqlite`, `openssl` and `zlib` extensions
+- PHP 8.1 or later with the `pdo_sqlite`, `openssl` and `zlib` extensions.
+  The SQLite library of PHP needs the `memdb` VFS and the `sqlite_dbpage`
+  table: the import decrypts the backup in memory. The official Nextcloud
+  container images have both.
 - A working Nextcloud background job (cron)
-- On the phone: WhatsApp with end-to-end encrypted backup and a 64-digit
-  key, and the Nextcloud mobile app with auto upload
+- On the phone: WhatsApp with end-to-end encrypted backup and the 64-digit
+  backup key, and the Nextcloud mobile app with auto upload
+- For an install from git only: Node and npm. The
+  [Build](docs/DEVELOPER-GUIDE.md#build) section of the developer guide gives
+  the versions.
 
 ## Install
 

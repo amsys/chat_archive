@@ -20,10 +20,16 @@ use OCP\IRequest;
 /**
  * Admin status and WAHA settings. Admin only: every route needs an admin.
  * No response holds the API key or a body of the WAHA server.
- *
- * arch: D26.2
  */
 class AdminController extends OCSController {
+	/** English text of each error code of WahaConfig::write(). */
+	private const ERROR_TEXTS = [
+		'bad_url' => 'the WAHA URL is not valid',
+		'bad_media_per_run' => 'media files per run must be between 0 and 200',
+		'unknown_user' => 'a session is assigned to a user that does not exist',
+		'bad_session' => 'a session name is not valid',
+	];
+
 	public function __construct(
 		IRequest $request,
 		private SourceMapper $sources,
@@ -83,7 +89,8 @@ class AdminController extends OCSController {
 			$this->waha->write($enabled, $url, $apiKey, $mediaPerRun ?? $this->waha->mediaPerRun(),
 				$sessions ?? $this->waha->sessions(), $realtime ?? $this->waha->describe()['realtime']);
 		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['error' => $e->getMessage(), 'code' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
+			$code = $e->getMessage();
+			return new DataResponse(['error' => self::ERROR_TEXTS[$code] ?? $code, 'code' => $code], Http::STATUS_BAD_REQUEST);
 		}
 		return new DataResponse($this->waha->describe());
 	}

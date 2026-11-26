@@ -14,12 +14,12 @@ assert(MediaLinker::nameCandidates('DOC-20250210-WA0027.') === ['DOC-20250210-WA
 assert(MediaLinker::nameCandidates('report. ') === ['report. ', 'report']);
 assert(MediaLinker::nameCandidates('...') === ['...']);
 
-// I6.1 owner rule. Normal case: folder has an owner, node must match it.
+// Owner rule. Normal case: folder has an owner, node must match it.
 assert(MediaLinker::isForeign('alice', 'alice', 'alice') === false);
 assert(MediaLinker::isForeign('bob', 'alice', 'alice') === true);
 // A share node reports no owner: foreign inside an owned folder.
 assert(MediaLinker::isForeign(null, 'alice', 'alice') === true);
-// Owner-less source folder (finding 7): fall back to the source's user id.
+// Owner-less source folder: fall back to the source's user id.
 assert(MediaLinker::isForeign('alice', null, 'alice') === false);
 assert(MediaLinker::isForeign('bob', null, 'alice') === true);
 // A null-owner node in a null-owner folder is accepted, not treated as foreign.

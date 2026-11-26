@@ -7,7 +7,7 @@ declare(strict_types=1);
 // This file stays out of phpstan's scan (excludePaths in phpstan.neon, same
 // as tests/phpstan). Kept in the paths phpstan scans, this second top-level
 // declaration of OCP\Files\File would shadow the real interface from
-// vendor/nextcloud/ocp and break every real call site (FAIL-T4).
+// vendor/nextcloud/ocp and break every real call site.
 namespace OCP\Files {
 	// Only the two methods that open() calls. This script loads no Nextcloud
 	// code, so the stand-in does not collide with the real interface.

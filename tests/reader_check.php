@@ -1,19 +1,20 @@
 <?php
 declare(strict_types=1);
 // Decrypt the fixture and read it back through the provider-neutral reader.
-// arch: D1.4, D6.2, D7.4 -- the reader takes an open PDO, not a path; the
+// The reader takes an open PDO, not a path; the
 // caller (WhatsAppProvider, or this check) owns the connection.
-// arch: D1.3, D1.4, D1.5, D6.2, D7.4 -- the D1.3 and I1.5 checks below call
+// The open() checks below call
 // the real WhatsAppProvider::open(). tests/stubs/OcpFilesFile.php gives it
 // the backup as a memory stream, so no file of the backup goes to disk. That
 // stand-in lives in its own file, excluded from phpstan's scan, so it does
-// not shadow the real OCP\Files\File from vendor/nextcloud/ocp (FAIL-T4).
+// not shadow the real OCP\Files\File from vendor/nextcloud/ocp.
 namespace OCA\ChatArchive\Source\WhatsApp {
 	// Test-only. MemDb.php calls random_bytes(16) unqualified with no `use
 	// function` import, so PHP checks this namespace for the name before it
-	// falls back to the global function. Armed only around the I1.5b case
-	// below, so this check learns MemDb's memdb name in advance without
-	// touching MemDb.php; every other case keeps the real generator.
+	// falls back to the global function. Armed only around the case below of
+	// a backup with no message table, so this check learns MemDb's memdb name
+	// in advance without touching MemDb.php; every other case keeps the real
+	// generator.
 	function random_bytes(int $length): string {
 		if ($length === 16 && ($GLOBALS['ca_fixed_rand'] ?? null) !== null) {
 			return $GLOBALS['ca_fixed_rand'];
@@ -24,6 +25,7 @@ namespace OCA\ChatArchive\Source\WhatsApp {
 
 namespace {
 require __DIR__ . '/stubs/OcpFilesFile.php';
+require __DIR__ . '/../lib/Service/ImportException.php';
 require __DIR__ . '/../lib/Source/WhatsApp/Crypt15.php';
 require __DIR__ . '/../lib/Source/IBackupReader.php';
 require __DIR__ . '/../lib/Source/IProvider.php';
@@ -62,12 +64,12 @@ $db = sys_get_temp_dir() . '/ca_reader_' . getmypid() . '.db';
 Crypt15::decryptFile("$fx/msgstore.db.crypt15", $db, trim(file_get_contents("$fx/key.hex")));
 $r = new MsgstoreReader(new PDO('sqlite:' . $db));
 
-// arch: D6.2 -- read the PRAGMAs back on the reader's own connection, so the
+// Read the PRAGMAs back on the reader's own connection, so the
 // check fails if a PRAGMA is ever dropped, not only if its comment is.
 $rdb = (new ReflectionProperty(MsgstoreReader::class, 'db'))->getValue($r);
-assert((int)$rdb->query('PRAGMA trusted_schema')->fetchColumn() === 0, 'D6.2: trusted_schema is OFF');
-assert((int)$rdb->query('PRAGMA temp_store')->fetchColumn() === 2, 'D6.2: temp_store is MEMORY');
-assert((int)$rdb->query('PRAGMA query_only')->fetchColumn() === 1, 'D6.2: query_only is set');
+assert((int)$rdb->query('PRAGMA trusted_schema')->fetchColumn() === 0, 'trusted_schema is OFF');
+assert((int)$rdb->query('PRAGMA temp_store')->fetchColumn() === 2, 'temp_store is MEMORY');
+assert((int)$rdb->query('PRAGMA query_only')->fetchColumn() === 1, 'query_only is set');
 unset($rdb);
 
 $chats = iterator_to_array($r->chats(), false);
@@ -75,7 +77,7 @@ assert(count($chats) === 2, 'two chats; the empty one is skipped');
 assert($chats[0]['platform_chat_id'] === '23000001@s.whatsapp.net', 'lid chat canonicalised to phone jid');
 assert($chats[0]['is_group'] === false && $chats[1]['is_group'] === true, 'group flag');
 assert($chats[1]['name'] === 'Family group', 'group subject');
-// arch: D2.1, D2.2, D9.1, D9.2 -- the chat row carries the phone archive flag as a bool
+// The chat row carries the phone archive flag as a bool
 assert($chats[0]['archived'] === false && $chats[1]['archived'] === true, 'archived flag per chat');
 assert(array_keys($chats[0]) === ['platform_chat_id', 'name', 'is_group', 'archived'], 'chat row keys');
 
@@ -85,7 +87,7 @@ assert($m[0]['body'] === 'hello from alice' && $m[0]['sender'] === '23000001@s.w
 assert($m[1]['from_me'] === true && $m[1]['sender'] === null, 'from me has no sender');
 assert($m[2]['kind'] === 'image' && $m[2]['media']['src_path'] === 'Media/WhatsApp Images/IMG-20240830-WA0001.jpg', 'media row');
 assert($m[2]['media']['caption'] === 'a photo', 'caption');
-// arch: D2.1, D2.2, D2.3, D2.4 -- WhatsApp's own flag reaches the media row raw (not a bool); K3 was built with suspicious_content=3.
+// WhatsApp's own flag reaches the media row raw (not a bool); K3 was built with suspicious_content=3.
 assert($m[2]['media']['suspicious'] === 3, 'suspicious flag reaches the media row, got ' . var_export($m[2]['media']['suspicious'], true));
 assert($m[0]['media'] === null, 'a text message with no media row has no media array');
 assert($m[0]['sent_at'] === 1725000000000, 'ms timestamp');
@@ -108,29 +110,29 @@ assert($calls[0]['result'] === 'connected' && $calls[0]['duration_s'] === 65, 'c
 assert($calls[1]['peer'] === '23000002-1600000000@g.us' && $calls[1]['video'] === true, 'group call peer');
 
 $r->close();
-// arch: D1.4 -- close() only drops the connection now; the file is the
+// Close() only drops the connection now; the file is the
 // caller's, not the reader's, so it is still on disk.
 assert(file_exists($db), 'close() does not touch the file it was given');
 @unlink($db);
 
-// arch: D1.3, D1.4, D1.5, D6.2, D7.4 -- the real WhatsAppProvider::open():
+// The real WhatsAppProvider::open():
 // the backup goes through MemDb into a reader with the safe PRAGMAs, and no
 // file is made.
 $key = trim(file_get_contents("$fx/key.hex"));
 $backupBytes = file_get_contents("$fx/msgstore.db.crypt15");
 $tmpBefore = glob(sys_get_temp_dir() . '/*') ?: [];
 $pr = (new WhatsAppProvider())->open(memFile($backupBytes), $key);
-assert($pr instanceof MsgstoreReader, 'D1.3: open() gives a MsgstoreReader');
+assert($pr instanceof MsgstoreReader, 'open() gives a MsgstoreReader');
 $prdb = (new ReflectionProperty(MsgstoreReader::class, 'db'))->getValue($pr);
-assert($prdb->query('PRAGMA database_list')->fetch()['file'] === '', 'D1.3: the reader database has no file (memdb)');
-assert((int)$prdb->query('PRAGMA query_only')->fetchColumn() === 1, 'D6.2: open() gives a query_only reader');
+assert($prdb->query('PRAGMA database_list')->fetch()['file'] === '', 'the reader database has no file (memdb)');
+assert((int)$prdb->query('PRAGMA query_only')->fetchColumn() === 1, 'open() gives a query_only reader');
 unset($prdb);
-assert(count(iterator_to_array($pr->chats(), false)) === 2, 'D1.3: open() reads the two chats');
+assert(count(iterator_to_array($pr->chats(), false)) === 2, 'open() reads the two chats');
 $pr->close();
 unset($pr);
-assert((glob(sys_get_temp_dir() . '/*') ?: []) === $tmpBefore, 'I1.1: open() makes no file');
+assert((glob(sys_get_temp_dir() . '/*') ?: []) === $tmpBefore, 'open() makes no file');
 
-// arch: D1.3, D1.4, D1.5, D6.2, D7.4 -- I1.5: a throw inside open() after
+// A throw inside open() after
 // MemDb has loaded every page (here: a bad md5 trailer, which Crypt15 checks
 // last) must free the memdb at once. The exception keeps its trace
 // arguments, and they hold the MemDb through the $mem->write(...) sink. So
@@ -146,7 +148,7 @@ try {
 } catch (\RuntimeException $e) {
 	$thrown = $e;
 }
-assert($thrown !== null && str_contains($thrown->getMessage(), 'md5 trailer'), 'I1.5: a bad trailer throws, got ' . var_export($thrown?->getMessage(), true));
+assert($thrown !== null && str_contains($thrown->getMessage(), 'md5 trailer'), 'a bad trailer throws, got ' . var_export($thrown?->getMessage(), true));
 // The open() frame holds the key as $secret; #[\SensitiveParameter] must hide it.
 assert(!str_contains(var_export($thrown->getTrace(), true), $key), 'the trace must not hold the key hex (WhatsAppProvider::open $secret)');
 $heldMem = null;
@@ -164,7 +166,7 @@ foreach ($thrown->getTrace() as $frame) {
 		}
 	}
 }
-assert($heldMem !== null, 'I1.5: the trace holds the MemDb, so the check below can see a leak');
+assert($heldMem !== null, 'the trace holds the MemDb, so the check below can see a leak');
 $heldName = (new ReflectionProperty(MemDb::class, 'name'))->getValue($heldMem);
 // A live loader still holds its write transaction: the probe then sees pages,
 // or "database is locked". Both mean the memdb is alive.
@@ -175,11 +177,11 @@ try {
 	$leftOpen = $pe->getMessage();
 }
 unset($probe, $pe);
-assert($leftOpen === '0 pages', "I1.5: a throw in open() leaves no memdb alive, got: $leftOpen");
-assert((glob(sys_get_temp_dir() . '/*') ?: []) === $tmpBefore, 'I1.5: a throw in open() leaves no file');
+assert($leftOpen === '0 pages', "a throw in open() leaves no memdb alive, got: $leftOpen");
+assert((glob(sys_get_temp_dir() . '/*') ?: []) === $tmpBefore, 'a throw in open() leaves no file');
 unset($thrown, $heldMem, $e);
 
-// arch: D1.3, D1.5 -- FAIL-T2, I1.5b: the OTHER throw point inside open(),
+// The OTHER throw point inside open(),
 // after MemDb has already handed the reader connection to open() (finish()
 // returned, MemDb owns nothing to abort()). A backup that loads cleanly into
 // memdb but has no `message` table makes `new MsgstoreReader($pdo)` throw
@@ -235,10 +237,10 @@ try {
 } finally {
 	$GLOBALS['ca_fixed_rand'] = null;
 }
-assert($thrown2 !== null, 'I1.5b: a backup with no message table throws');
-assert(str_contains($thrown2->getMessage(), 'message'), 'I1.5b: the message names the missing table, got ' . var_export($thrown2->getMessage(), true));
-assert($thrown2->getPrevious() === null, 'D1.3: the reader-construction guard rethrows with no previous exception');
-assert((glob(sys_get_temp_dir() . '/*') ?: []) === $tmpBefore2, 'I1.1: a constructor throw in open() leaves no file');
+assert($thrown2 !== null, 'a backup with no message table throws');
+assert(str_contains($thrown2->getMessage(), 'message'), 'the message names the missing table, got ' . var_export($thrown2->getMessage(), true));
+assert($thrown2->getPrevious() === null, 'the reader-construction guard rethrows with no previous exception');
+assert((glob(sys_get_temp_dir() . '/*') ?: []) === $tmpBefore2, 'a constructor throw in open() leaves no file');
 // Probe before dropping $thrown2/$e: the check must not free the leak itself
 // by unsetting the only reference before it looks -- that would pass against
 // a mutant that skips the guard just as easily as against the fix.
@@ -249,17 +251,17 @@ try {
 	$leftOpen2 = $pe2->getMessage();
 }
 unset($probe2, $pe2);
-assert($leftOpen2 === '0 pages', "I1.5b: a throw inside new MsgstoreReader(\$pdo) leaves no memdb alive, got: $leftOpen2");
+assert($leftOpen2 === '0 pages', "a throw inside new MsgstoreReader(\$pdo) leaves no memdb alive, got: $leftOpen2");
 unset($thrown2, $e);
 
 // Old schema without jid_map and the call tables: read from a copy (the
-// fixtures directory is mounted read-only in the check image, D7.4).
+// fixtures directory is mounted read-only in the check image).
 $db_plain = sys_get_temp_dir() . '/ca_reader_plain_' . getmypid() . '.db';
 copy("$fx/msgstore_old.db", $db_plain);
 $r_plain = new MsgstoreReader(new PDO('sqlite:' . $db_plain));
 $chats_plain = iterator_to_array($r_plain->chats(), false);
 assert(count($chats_plain) === 2, 'no jid_map: two chats');
-// arch: D2.1, D2.2, D9.1, D9.2 -- no chat.archived column: the flag is null, the row shape stays the same
+// No chat.archived column: the flag is null, the row shape stays the same
 assert($chats_plain[0]['archived'] === null && $chats_plain[1]['archived'] === null, 'no chat.archived: archived is null');
 assert(array_keys($chats_plain[0]) === array_keys($chats[0]), 'no chat.archived: same chat row shape');
 assert($chats_plain[0]['platform_chat_id'] === '123456789@lid', 'no jid_map: the lid chat keeps its lid');
@@ -267,7 +269,7 @@ $m_plain = iterator_to_array($r_plain->messages('123456789@lid'), false);
 assert(count($m_plain) === 5, 'no call tables: all five messages still read');
 assert($m_plain[0]['body'] === 'hello from alice' && $m_plain[0]['sender'] === '123456789@lid', 'no jid_map: sender stays lid');
 assert($m_plain[2]['media']['src_path'] === 'Media/WhatsApp Images/IMG-20240830-WA0001.jpg', 'no call tables: media still read');
-// arch: D2.1, D2.2, D2.3, D2.4 -- I2.2: msgstore_old.db has no suspicious_content column, so the flag stays null, not 0 or missing.
+// Msgstore_old.db has no suspicious_content column, so the flag stays null, not 0 or missing.
 assert(array_key_exists('suspicious', $m_plain[2]['media']), 'no suspicious_content column: the media row still carries the key');
 assert($m_plain[2]['media']['suspicious'] === null, 'no suspicious_content column: the flag reads null, got ' . var_export($m_plain[2]['media']['suspicious'], true));
 assert($m_plain[3]['kind'] === 'call_log' && $m_plain[3]['call'] === null, 'no call tables: call facts are null');
@@ -277,7 +279,7 @@ assert(iterator_to_array($r_plain->calls(), false) === [], 'no call_log: calls()
 $r_plain->close();
 @unlink($db_plain);
 
-// arch: D2.1, D2.2, D9.1, D9.2 -- the later backup (v2) as the reader sees it.
+// The later backup (v2) as the reader sees it.
 $db_v2 = sys_get_temp_dir() . '/ca_reader_v2_' . getmypid() . '.db';
 Crypt15::decryptFile("$fx/msgstore_v2.db.crypt15", $db_v2, trim(file_get_contents("$fx/key.hex")));
 $r_v2 = new MsgstoreReader(new PDO('sqlite:' . $db_v2));
@@ -289,12 +291,12 @@ $by_key = array_column($m_v2, null, 'platform_msg_id');
 assert(array_keys($by_key) === ['K1', 'K2', 'K3', 'K7'], 'v2: K8 removed, got ' . implode(',', array_keys($by_key)));
 assert($by_key['K1']['kind'] === 'text' && $by_key['K1']['body'] === 'hello from alice, edited', 'v2: K1 edited');
 assert($by_key['K2']['kind'] === 'revoked' && $by_key['K2']['body'] === null, 'v2: K2 revoked');
-// arch: D2.1, D2.2, D2.3, D2.4 -- the flag survives into the later backup unchanged (make_fixture.py sets it on both builds).
+// The flag survives into the later backup unchanged (make_fixture.py sets it on both builds).
 assert($by_key['K3']['media']['suspicious'] === 3, 'v2: K3 still carries the flag, got ' . var_export($by_key['K3']['media']['suspicious'], true));
 $r_v2->close();
 @unlink($db_v2);
 
-// arch: D2.1, D2.2, D9.1, D9.2 -- ANY rule: a lid chat and its phone chat fold into one chat.
+// ANY rule: a lid chat and its phone chat fold into one chat.
 // Only the phone row (no messages) is archived. The folded chat reads archived, and keeps its key.
 $db_fold = sys_get_temp_dir() . '/ca_reader_fold_' . getmypid() . '.db';
 copy("$fx/msgstore.db", $db_fold);

@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 // Pure mapping from WAHA message JSON to the neutral message row of the backup reader.
-// arch: D24.1
 
 namespace OCA\ChatArchive\Waha;
 
@@ -39,7 +38,37 @@ final class WahaMapper
         return $wahaId;
     }
 
-    /** Take the key id out of a WAHA message id. Null when there is none. */
+    /**
+     * Compare the account of a WAHA session with the account that the source
+     * knows. A sync without the account could write the chats of another
+     * account into the source, so it stops.
+     *
+     * @param ?string $known the stored account jid of the source, null before the first sync
+     * @param ?string $wahaMe the 'me' id that WAHA gives for the session
+     * @return ?string the account jid to store, or null when there is nothing to store
+     * @throws WahaException waha_no_account when the source knows an account and WAHA gives none;
+     *     waha_account_changed when WAHA gives a different account
+     */
+    public static function account(?string $known, ?string $wahaMe): ?string
+    {
+        $me = self::jid($wahaMe);
+        if ($known !== null && $me === null) {
+            throw new WahaException('waha_no_account');
+        }
+        if ($known !== null && $me !== $known) {
+            throw new WahaException('waha_account_changed');
+        }
+        if ($known === null && $me !== null) {
+            return $me;
+        }
+        return null;
+    }
+
+    /**
+     * Take the key id out of a WAHA message id. The id is
+     * '<true|false>_<chat id>_<key id>[_<participant>]', or the key id alone.
+     * Null when there is none.
+     */
     public static function keyId(string $wahaMessageId): ?string
     {
         if ($wahaMessageId === '') {

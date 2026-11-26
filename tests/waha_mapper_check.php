@@ -3,11 +3,12 @@
 declare(strict_types=1);
 
 // Id, kind and message mapping of the WAHA mapper.
-// arch: D24.1
 // php -d zend.assertions=1 -d assert.exception=1 tests/waha_mapper_check.php
 
+require __DIR__ . '/../lib/Waha/WahaException.php';
 require __DIR__ . '/../lib/Waha/WahaMapper.php';
 
+use OCA\ChatArchive\Waha\WahaException;
 use OCA\ChatArchive\Waha\WahaMapper as W;
 
 assert(W::jid('123@c.us') === '123@s.whatsapp.net');
@@ -93,5 +94,25 @@ assert(W::mediaName('3EB0AB', 'image/jpeg', null) === '3EB0AB.jpg');
 assert(W::mediaName('3EB0AB', 'image/webp', null) === '3EB0AB.webp');
 assert(W::mediaName('3EB0AB', 'x/unknown', 'a.php') === '3EB0AB.bin');
 assert(W::mediaName('../a/b', null, null) === 'ab.bin');
+
+// The account of the session against the account that the source knows.
+$accountError = static function (?string $known, ?string $wahaMe): ?string {
+    try {
+        W::account($known, $wahaMe);
+    } catch (WahaException $e) {
+        return $e->errorCode;
+    }
+    return null;
+};
+// The source knows an account and WAHA gives none: the sync stops.
+assert($accountError('123@s.whatsapp.net', null) === 'waha_no_account');
+assert($accountError('123@s.whatsapp.net', '') === 'waha_no_account');
+// WAHA gives a different account: the sync stops.
+assert($accountError('123@s.whatsapp.net', '456@c.us') === 'waha_account_changed');
+// The first sync gets the account to store.
+assert(W::account(null, '123@c.us') === '123@s.whatsapp.net');
+// Nothing to store: the account is the same, or neither side has one.
+assert(W::account('123@s.whatsapp.net', '123@c.us') === null);
+assert(W::account(null, null) === null);
 
 echo "waha_mapper: OK\n";

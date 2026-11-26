@@ -54,7 +54,8 @@ class FullTextSearchService {
 	 * "no results".
 	 *
 	 * The index has no offset, so it must return the ids of every earlier page
-	 * as well. The caller asks for $offset + $limit ids and then skips $offset.
+	 * as well. This method asks the index for $offset + $limit ids; the caller
+	 * then skips $offset.
 	 * @return int[]
 	 */
 	public function searchIds(string $userId, string $term, ?int $sourceId, int $limit, int $offset = 0): array {

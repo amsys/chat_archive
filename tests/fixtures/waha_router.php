@@ -2,7 +2,6 @@
 
 // Fake WAHA server for the integration test. Run it inside the test
 // container with `php -S 127.0.0.1:3999 waha_router.php`.
-// arch: D32.1
 //
 // It serves fixed data for the session "default" (GET only, I20.3):
 // - chat 23000001@c.us is chat A of the fixture backup. It holds K8, a
@@ -31,7 +30,7 @@ const CHATS = [
 		],
 	],
 	'23000001@c.us' => [
-		'name' => null,
+		'name' => 'Anna from WhatsApp',
 		'messages' => [
 			[
 				'id' => 'false_23000001@c.us_K8',

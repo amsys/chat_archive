@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\ChatArchive\Source\WhatsApp;
 
+use OCA\ChatArchive\Service\ImportException;
 use RuntimeException;
 
 /**
@@ -18,15 +19,19 @@ use RuntimeException;
  *   [16] GCM tag
  *   [16] md5 of everything before it
  *
- * ponytail: the GCM tag is not verified (PHP has no streaming AEAD). Corruption
- * is caught by the md5 trailer, a wrong key by the zlib/SQLite header check.
- * Upgrade path: verify the tag with a one-shot openssl_decrypt when the file
- * fits in memory.
+ * The GCM tag is not verified, because PHP has no streaming AEAD. The md5
+ * trailer catches corruption, and the zlib/SQLite header check catches a
+ * wrong key. To verify the tag, a later version can use a one-shot
+ * openssl_decrypt when the file fits in memory.
  */
 final class Crypt15 {
 	private const CHUNK = 1048576;
 
-	/** @throws RuntimeException */
+	/**
+	 * Decrypt the file $src into the file $dst. Only the tests call this: the
+	 * import uses decryptTo(), which writes no decrypted byte to disk.
+	 * @throws RuntimeException
+	 */
 	public static function decryptFile(string $src, string $dst, #[\SensitiveParameter] string $keyHex): void {
 		$in = fopen($src, 'rb');
 		if ($in === false) {
@@ -41,7 +46,8 @@ final class Crypt15 {
 
 	/**
 	 * Decrypt a readable stream of $size bytes into $dst. The stream is read once, in order;
-	 * no seek is needed, so a Nextcloud file handle works as-is.
+	 * no seek is needed, so a Nextcloud file handle works as-is. Only the tests
+	 * call this: the import uses decryptTo().
 	 * @param resource $in
 	 * @throws RuntimeException
 	 */
@@ -98,7 +104,7 @@ final class Crypt15 {
 	public static function backupKey(#[\SensitiveParameter] string $keyHex): string {
 		$root = @hex2bin(trim($keyHex));
 		if ($root === false || strlen($root) !== 32) {
-			throw new RuntimeException('backup key must be 64 hex characters');
+			throw new ImportException('wrong_key', 'backup key must be 64 hex characters');
 		}
 		$private = hash_hmac('sha256', $root, str_repeat("\0", 32), true);
 		return hash_hmac('sha256', 'backup encryption' . "\x01", $private, true);
@@ -117,12 +123,12 @@ final class Crypt15 {
 			$n = self::chunkSize(min(self::CHUNK, $left), $counter);
 			$chunk = self::readN($in, $n);
 			if (strlen($chunk) !== $n) {
-				throw new RuntimeException('truncated crypt15 body');
+				throw new ImportException('corrupt_backup', 'truncated crypt15 body');
 			}
 			hash_update($md5, $chunk);
 			$plain = openssl_decrypt($chunk, 'aes-256-ctr', $key, OPENSSL_RAW_DATA, $counter);
 			if ($plain === false) {
-				throw new RuntimeException('AES-CTR failed: ' . openssl_error_string());
+				throw new ImportException('corrupt_backup', 'AES-CTR failed: ' . openssl_error_string());
 			}
 			$counter = self::advance($counter, $n);
 			$left -= $n;
@@ -137,7 +143,7 @@ final class Crypt15 {
 		$checksum = self::readN($in, 16);
 		hash_update($md5, $tag);
 		if (!hash_equals(hash_final($md5, true), $checksum)) {
-			throw new RuntimeException('md5 trailer mismatch: corrupt or multi-file backup');
+			throw new ImportException('corrupt_backup', 'md5 trailer mismatch: corrupt or multi-file backup');
 		}
 	}
 
@@ -151,14 +157,14 @@ final class Crypt15 {
 		$read = static function (int $n) use ($in, $md5): string {
 			$b = self::readN($in, $n);
 			if (strlen($b) !== $n) {
-				throw new RuntimeException('truncated crypt15 header');
+				throw new ImportException('corrupt_backup', 'truncated crypt15 header');
 			}
 			hash_update($md5, $b);
 			return $b;
 		};
 		$protoLen = ord($read(1));
 		if ($protoLen < 1) {
-			throw new RuntimeException('crypt15 header has no prefix');
+			throw new ImportException('corrupt_backup', 'crypt15 header has no prefix');
 		}
 		// an optional 0x01 flag sits before the proto; without it, the byte is the proto's first byte
 		$flag = $read(1);
@@ -166,7 +172,7 @@ final class Crypt15 {
 		$iv = self::ivFromPrefix($proto);
 		$cipherLen = $size - 2 - ($protoLen - ($flag === "\x01" ? 0 : 1)) - 32;
 		if ($cipherLen <= 0) {
-			throw new RuntimeException('crypt15 file too short');
+			throw new ImportException('corrupt_backup', 'crypt15 file too short');
 		}
 		return [$iv, $cipherLen];
 	}
@@ -189,18 +195,18 @@ final class Crypt15 {
 	/** @return \InflateContext|false false for a raw SQLite stream */
 	private static function detectStream(#[\SensitiveParameter] string $plain): \InflateContext|false {
 		if ($plain[0] === "\x78") {
-			return inflate_init(15 /* ZLIB_ENCODING_ZLIB */);
+			return inflate_init(ZLIB_ENCODING_DEFLATE); // the zlib wrapper, RFC 1950
 		}
 		if (str_starts_with($plain, 'SQLite format 3')) {
 			return false;
 		}
-		throw new RuntimeException('decrypted data is neither zlib nor SQLite: wrong key?');
+		throw new ImportException('wrong_key', 'decrypted data is neither zlib nor SQLite: wrong key?');
 	}
 
 	/** @param \Closure(string): void $out */
 	private static function write(\Closure $out, #[\SensitiveParameter] string|false $data): void {
 		if ($data === false) {
-			throw new RuntimeException('zlib error: corrupt backup or wrong key');
+			throw new ImportException('corrupt_backup', 'zlib error: corrupt backup or wrong key');
 		}
 		if ($data !== '') {
 			$out($data);
@@ -212,7 +218,7 @@ final class Crypt15 {
 		$sub = self::protoField($buf, 3);
 		$iv = $sub === null ? null : self::protoField($sub, 1);
 		if ($iv === null || strlen($iv) !== 16) {
-			throw new RuntimeException('no 16-byte IV in crypt15 header (crypt14 file?)');
+			throw new ImportException('unsupported_backup', 'no 16-byte IV in crypt15 header (crypt14 file?)');
 		}
 		return $iv;
 	}
@@ -225,7 +231,7 @@ final class Crypt15 {
 			$shift = 0;
 			do {
 				if ($i >= $len) {
-					throw new RuntimeException('bad protobuf');
+					throw new ImportException('corrupt_backup', 'bad protobuf');
 				}
 				$b = ord($buf[$i++]);
 				$v |= ($b & 0x7F) << $shift;
@@ -254,7 +260,7 @@ final class Crypt15 {
 					$i += 4;
 					break;
 				default:
-					throw new RuntimeException('bad protobuf wire type');
+					throw new ImportException('corrupt_backup', 'bad protobuf wire type');
 			}
 		}
 		return null;
@@ -268,11 +274,11 @@ final class Crypt15 {
 		$tag = '';
 		$ks = openssl_encrypt(str_repeat("\0", 16), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
 		if ($ks === false) {
-			throw new RuntimeException('AES-GCM setup failed: ' . openssl_error_string());
+			throw new ImportException('corrupt_backup', 'AES-GCM setup failed: ' . openssl_error_string());
 		}
 		$ctr = openssl_decrypt($ks, 'aes-256-ecb', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
 		if ($ctr === false || strlen($ctr) !== 16) {
-			throw new RuntimeException('AES-ECB failed: ' . openssl_error_string());
+			throw new ImportException('corrupt_backup', 'AES-ECB failed: ' . openssl_error_string());
 		}
 		return $ctr;
 	}

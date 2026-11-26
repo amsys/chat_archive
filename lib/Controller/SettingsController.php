@@ -35,8 +35,6 @@ use OCP\Security\ICrypto;
  * Sources and preferences of the calling user. The secret is stored
  * encrypted and never read back out. An error response holds an English
  * `error` text and a stable `code` that the frontend translates.
- *
- * arch: D26.1
  */
 class SettingsController extends OCSController {
 	public function __construct(
@@ -90,7 +88,6 @@ class SettingsController extends OCSController {
 	 * The mode of a source cannot change, so this route ignores `$mode`.
 	 * A null `$syncSession` keeps the stored session; an empty string turns
 	 * the live sync off.
-	 * arch: D34.4
 	 */
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'PUT', url: '/settings/sources/{id}')]
@@ -107,7 +104,7 @@ class SettingsController extends OCSController {
 
 	/**
 	 * Refused while the caller's preserve switch is on (I20.8). The claim
-	 * keeps an import from starting while the rows are deleted (P5).
+	 * keeps an import from starting while the rows are deleted.
 	 */
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'DELETE', url: '/settings/sources/{id}')]
@@ -122,7 +119,7 @@ class SettingsController extends OCSController {
 				Http::STATUS_CONFLICT);
 		}
 		if (!$this->sources->claim($source)) {
-			return $this->error('running', 'an import of this source is running', Http::STATUS_CONFLICT);
+			return $this->error('running', 'an import or a sync of this source is running', Http::STATUS_CONFLICT);
 		}
 		$this->fts->forgetSource($id, $this->store->messageIds($id));
 		$this->store->deleteSource($id);
@@ -132,8 +129,7 @@ class SettingsController extends OCSController {
 
 	/**
 	 * Queue a forced import; it runs with the next cron tick. Only the call
-	 * that changes the state adds the job, so a second click queues nothing (P4).
-	 * arch: D29.1
+	 * that changes the state adds the job, so a second click queues nothing.
 	 */
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'POST', url: '/settings/sources/{id}/import')]
@@ -156,14 +152,9 @@ class SettingsController extends OCSController {
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'POST', url: '/settings/probe')]
 	public function probe(string $folder, #[\SensitiveParameter] ?string $secret = null): DataResponse {
-		$uid = (string)$this->userId;
 		$path = '/' . trim($folder, '/');
-		try {
-			$node = $this->root->getUserFolder($uid)->get($path);
-		} catch (NotFoundException|NotPermittedException) {
-			return $this->error('folder_not_found', "folder not found: $path");
-		}
-		if ($node->getOwner()?->getUID() !== $uid) {
+		$node = $this->ownNode($path);
+		if ($node === null) {
 			return $this->error('folder_not_found', "folder not found: $path");
 		}
 		if (!$node instanceof Folder) {
@@ -198,7 +189,7 @@ class SettingsController extends OCSController {
 		try {
 			$this->click->write((string)$this->userId, $action, $template);
 		} catch (\InvalidArgumentException $e) {
-			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
+			return $this->error('bad_click_action', $e->getMessage());
 		}
 		return new DataResponse($this->click->read((string)$this->userId));
 	}
@@ -231,13 +222,14 @@ class SettingsController extends OCSController {
 		$source->setLabel($label);
 		$source->setFolder($folder);
 		$source->setOnDelete($onDelete);
-		// P11: the trimmed key goes into a new variable, the parameter stays as given.
+		// The parameter is marked sensitive, so a trace hides it as given.
+		// Keep the trimmed key in a local variable. Do not write it back to the parameter.
 		$key = trim($secret ?? '');
 		if ($key !== '') {
 			$source->setSecret($this->crypto->encrypt($key));
 		}
 		if ($syncSession === '') {
-			// arch: D34.4
+			// An empty string turns live sync off for this source.
 			$source->setSyncSession(null);
 		} elseif ($syncSession !== null) {
 			$source->setSyncSession($syncSession);
@@ -256,9 +248,8 @@ class SettingsController extends OCSController {
 		} catch (\InvalidArgumentException $e) {
 			return $this->error('unknown_provider', $e->getMessage());
 		}
-		try {
-			$node = $this->root->getUserFolder((string)$this->userId)->get($folder);
-		} catch (NotFoundException) {
+		$node = $this->ownNode($folder);
+		if ($node === null) {
 			return $this->error('folder_not_found', "folder not found: $folder");
 		}
 		if (!$node instanceof Folder) {
@@ -273,6 +264,21 @@ class SettingsController extends OCSController {
 		return null;
 	}
 
+	/**
+	 * The node at `$path` in the folder of the caller. Null when the node is
+	 * not there, when access to it is refused, or when another user owns it,
+	 * for example in a received share.
+	 */
+	private function ownNode(string $path): ?\OCP\Files\Node {
+		$uid = (string)$this->userId;
+		try {
+			$node = $this->root->getUserFolder($uid)->get($path);
+		} catch (NotFoundException|NotPermittedException) {
+			return null;
+		}
+		return $node->getOwner()?->getUID() === $uid ? $node : null;
+	}
+
 	/** Format check of a backup key. An empty key passes: it keeps the stored one. */
 	private function checkKey(string $provider, #[\SensitiveParameter] ?string $secret): ?DataResponse {
 		$key = trim($secret ?? '');
@@ -285,10 +291,8 @@ class SettingsController extends OCSController {
 	/**
 	 * Rules for a new live-only source and for a request that sets a WAHA
 	 * session. A new live-only source needs a session. Only the admin
-	 * assigns sessions to users, and one session feeds one source at most.
-	 * An existing source can drop its session (D34.4).
-	 * arch: D26.1
-	 * arch: D20.2 (I20.4)
+	 * assigns sessions to users, and one session feeds one source at most (I20.4).
+	 * An existing source can drop its session.
 	 */
 	private function checkLive(Source $source, ?string $syncSession, bool $tos): ?DataResponse {
 		$setsSession = $syncSession !== null && $syncSession !== '';
@@ -299,7 +303,10 @@ class SettingsController extends OCSController {
 		if (!$this->waha->enabled()) {
 			return $this->error('live_not_allowed', 'live sync is not allowed on this server');
 		}
-		if (!$setsSession || !in_array($syncSession, $this->waha->sessionsOf((string)$this->userId), true)) {
+		if (!$setsSession) {
+			return $this->error('session_required', 'a live source needs a session');
+		}
+		if (!in_array($syncSession, $this->waha->sessionsOf((string)$this->userId), true)) {
 			return $this->error('bad_session', 'this live sync session is not assigned to you');
 		}
 		if ($this->sessionInUse($syncSession, $source)) {

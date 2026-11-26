@@ -6,7 +6,7 @@ namespace OCA\ChatArchive\Command;
 
 use OCA\ChatArchive\Db\Source;
 use OCA\ChatArchive\Db\SourceMapper;
-use OCA\ChatArchive\Service\ImportRunningException;
+use OCA\ChatArchive\Service\SourceBusyException;
 use OCA\ChatArchive\Service\ImportService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -40,20 +40,20 @@ class Import extends Command {
 			}
 			$label = sprintf('%s [%d] %s (%s)', $source->getUserId(), $source->getId(), $source->getLabel(), $source->getFolder());
 			if ($source->getMode() === Source::MODE_LIVE) {
-				$output->writeln(json_encode(['source' => $source->getId(), 'skipped' => 'live']));
+				$output->writeln("$label: skipped, live source");
 				continue;
 			}
 			// Two imports of one source collide on the unique message index. Only an
 			// executing import blocks: a queued source is work this run may drain.
 			if ($source->isRunning()) {
-				$output->writeln("$label: import already running");
+				$output->writeln("$label: an import or a sync is running");
 				continue;
 			}
 			try {
 				$stats = $this->import->run($source, (bool)$input->getOption('force'));
 				$output->writeln("$label: " . json_encode($stats));
-			} catch (ImportRunningException) {
-				$output->writeln("$label: import already running");
+			} catch (SourceBusyException) {
+				$output->writeln("$label: an import or a sync is running");
 			} catch (\Throwable $e) {
 				$output->writeln("<error>$label: {$e->getMessage()}</error>");
 				$rc = 1;

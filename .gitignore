@@ -9,3 +9,4 @@ deploy.sh
 .state/
 docs/features/
 .scratch/
+.playwright-mcp/

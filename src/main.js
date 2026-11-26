@@ -1,3 +1,4 @@
+// Entry of the main page: mounts App.vue.
 import { createApp } from 'vue'
 import App from './App.vue'
 

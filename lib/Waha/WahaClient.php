@@ -10,8 +10,6 @@ use OCP\Http\Client\LocalServerException;
 /**
  * Read-only HTTP client for the WAHA REST API. It sends GET requests only
  * and turns every failure into a WahaException without a previous exception.
- *
- * arch: D23.2, D20.2
  */
 class WahaClient {
 	public function __construct(
@@ -103,7 +101,7 @@ class WahaClient {
 		return $body;
 	}
 
-	/** @return ?string pn or null */
+	/** @return ?string the phone-number id ('<digits>@c.us') of a lid, or null when WAHA has none */
 	public function lid(string $session, string $lid): ?string {
 		$d = $this->json('/api/' . rawurlencode($session) . '/lids/' . rawurlencode($lid), [], true);
 		$pn = $d['pn'] ?? null;

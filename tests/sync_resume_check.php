@@ -10,8 +10,9 @@ declare(strict_types=1);
 // costs a message request only while the archive holds no message for it.
 // The media pass asks WAHA by the plain key id. A file that cannot be written
 // counts one try and stops the media pass for that run. The next run takes
-// the files with no failed try first.
-// arch: D25.1, D20.2
+// the files with no failed try first. A sync stops when WAHA gives no account
+// for a source that knows one, and an error that does not come from WAHA ends
+// with sync_failed.
 // php -d zend.assertions=1 -d assert.exception=1 tests/sync_resume_check.php
 
 $world = require __DIR__ . '/stubs/SyncStubs.php';
@@ -28,6 +29,8 @@ assert($r['stats']['chats'] === 60 && $r['stats']['messages'] === 60);
 assert($r['chats_with_messages'] === 60);
 assert($r['overview'] === [0, 50]);
 assert($r['error'] === null && $r['state'] === null);
+// The first sync stores the account of the session.
+assert($r['me'] === '23099999@s.whatsapp.net');
 
 // The media pass of run 1 runs in the rest of the box. The group image of
 // another member is asked for by its plain key id and stored. The next image
@@ -70,5 +73,25 @@ $r = $w->run();
 assert($r['stats']['media'] === 0 && $r['media_asked'] === []);
 assert($r['media']['K5']['tries'] === 3 && $r['media']['K5']['file_id'] === null);
 assert($r['messages'] === 120 && $r['error'] === null);
+
+// The source knows its account and WAHA gives no account: the sync stops
+// before it adds a message, and the stored account stays.
+$w = $world(5);
+$w->source->syncMe = '23099999@s.whatsapp.net';
+$w->client->me = null;
+$r = $w->run();
+assert($r['error'] === 'waha_no_account' && $r['state'] === null);
+assert($r['overview'] === [] && $r['messages'] === 0);
+assert($r['me'] === '23099999@s.whatsapp.net');
+
+// An error that does not come from WAHA ends with sync_failed, and the log
+// line holds no exception object.
+$w = $world(5);
+$w->client->overviewError = new \RuntimeException('boom');
+$r = $w->run();
+assert($r['error'] === 'sync_failed' && $r['state'] === null);
+assert($r['messages'] === 0);
+assert(count($r['warnings']) === 1 && $r['warnings'][0][1]['class'] === 'RuntimeException');
+assert(!array_key_exists('exception', $r['warnings'][0][1]));
 
 echo "sync_resume: OK\n";

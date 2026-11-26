@@ -7,7 +7,9 @@ namespace OCA\ChatArchive\Db;
 use OCP\AppFramework\Db\Entity;
 
 /**
- * One configured backup: a provider (whatsapp, ...) reading one Nextcloud folder.
+ * One archive source of a user: a provider (whatsapp, ...) and one Nextcloud
+ * folder. In mode backup the provider reads the backup file in that folder.
+ * In mode live a WAHA session writes into it and there is no backup file.
  *
  * @method string getUserId()
  * @method void setUserId(string $v)
@@ -65,7 +67,7 @@ class Source extends Entity {
 	protected ?int $importSince = null;    // unix s, when the state was set
 	protected string $mode = self::MODE_BACKUP;
 	protected ?string $syncSession = null; // WAHA session name; null = live sync off
-	protected ?string $syncMe = null;      // me.id seen at the first sync
+	protected ?string $syncMe = null;      // own jid ('<digits>@s.whatsapp.net') seen at the first sync
 	protected ?int $syncAt = null;         // unix s of the last sync without error
 	protected ?string $syncError = null;   // error code of the last sync
 	protected ?int $tosAt = null;          // unix s when the user accepted the warning
@@ -96,8 +98,10 @@ class Source extends Entity {
 		return $this->importState === 'running' && ($this->importSince ?? 0) > time() - 6 * 3600;
 	}
 
-	/** Public view: never the secret itself. */
-	/** @return array<string, mixed> */
+	/**
+	 * Public view: never the secret itself.
+	 * @return array<string, mixed>
+	 */
 	public function toArray(): array {
 		return [
 			'id' => $this->getId(),

@@ -83,9 +83,8 @@ class BackupListener implements IEventListener {
 		if ($backup === null || $backup->getId() !== $node->getId()) {
 			return;
 		}
-		// arch: D29.1
 		// Only the caller that changed the row adds the job: two writes of one
-		// backup add one job (P4).
+		// backup add one job.
 		if ($this->sources->queue($source)) {
 			$this->jobs->add(ImportSourceJob::class, ['sourceId' => $source->getId()]);
 		}

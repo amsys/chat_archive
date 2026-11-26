@@ -91,7 +91,8 @@ class ApiController extends OCSController {
 	/**
 	 * Realtime update of an open chat: add the new messages of this one chat
 	 * from WAHA. The page then loads them with the messages route. `live` is
-	 * false when the admin switch is off or the source has no session; the
+	 * false when live sync or its realtime option is off, or the source has no
+	 * session; the
 	 * page then stops asking. A server with a memory cache asks WAHA at most
 	 * one time in LIVE_GAP seconds for each chat.
 	 */
@@ -114,7 +115,7 @@ class ApiController extends OCSController {
 			try {
 				$added = $this->sync->runChat($source, $session, $id, $chat['platformChatId'], $chat['lastAt']);
 			} catch (WahaException) {
-				// The timed sync reports the state of the session; this call only adds nothing.
+				// A WAHA failure here adds no message. The timed sync reports the state of the session.
 			}
 		}
 		$lastAt = $added > 0 ? ($this->store->chatSource($id)['lastAt'] ?? null) : $chat['lastAt'];
@@ -165,7 +166,6 @@ class ApiController extends OCSController {
 
 	/**
 	 * Hits ranked by the full text index, or null when the caller must run the plain scan.
-	 * arch: D29.4
 	 * @param int[] $sourceIds
 	 * @param array<string, mixed> $filters
 	 * @return ?list<array<string, mixed>>
@@ -174,7 +174,7 @@ class ApiController extends OCSController {
 		if ($q === '' || !$this->fts->isEnabled()) {
 			return null;
 		}
-		// ponytail: the index ranks, SQL filters afterwards; fetch a wide top-N so a date filter does not starve the page
+		// The index ranks and SQL filters afterwards. Fetch a wide top-N, so a date filter does not starve the page.
 		$ids = $this->fts->searchIds((string)$this->userId, $q, $source, $filters === [] ? $limit + 1 : 10 * $limit, $offset);
 		// no ids means the index is stale or the platform is down, not "no matches": fall through to LIKE
 		if ($ids === []) {
@@ -248,9 +248,13 @@ class ApiController extends OCSController {
 	}
 
 	/**
-	 * Private chats resolve from the jid, not the stored name: a chat mapped
-	 * from an @lid id keeps a stale name. The result is cached on the row
-	 * ('' = tried, no match) so the list stays fast.
+	 * Private chats resolve from the jid first: the address books of the user
+	 * give the name, and the result is cached on the row ('' = tried, no
+	 * match) so the list stays fast. With no match, the stored name shows
+	 * when it is a name (the live sync stores the name that WhatsApp holds).
+	 * A stored name that is only a number does not show; the number of the
+	 * jid shows in its place, because a chat mapped from an @lid id can keep a
+	 * stale number.
 	 * @param array<string, mixed> $chat
 	 */
 	private function chatName(array $chat): string {
@@ -262,7 +266,8 @@ class ApiController extends OCSController {
 			$this->store->setChatDisplayName($chat['id'], $resolved ?? '');
 			$chat['displayName'] = $resolved ?? '';
 		}
-		return (string)DisplayText::name($chat['displayName'] !== '' ? $chat['displayName'] : ContactNames::fallback($chat['platformChatId']));
+		$stored = DisplayText::noName($chat['name']) ? ContactNames::fallback($chat['platformChatId']) : $chat['name'];
+		return (string)DisplayText::name($chat['displayName'] !== '' ? $chat['displayName'] : $stored);
 	}
 
 	/**

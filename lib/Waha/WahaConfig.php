@@ -12,8 +12,6 @@ use OCP\Security\ICrypto;
 /**
  * Admin settings of the WAHA live sync, kept in app config. The API key is
  * stored encrypted and is never returned to the browser.
- *
- * arch: D23.1, D20.2
  */
 class WahaConfig {
 	public function __construct(
@@ -23,6 +21,7 @@ class WahaConfig {
 	) {
 	}
 
+	/** True when the admin switch is on and a URL and a key are stored. */
 	public function enabled(): bool {
 		return $this->config->getAppValueBool('waha_enabled', false)
 			&& $this->url() !== ''

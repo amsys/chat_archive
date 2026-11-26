@@ -22,11 +22,11 @@ use Psr\Log\LoggerInterface;
  * adds the messages that are newer than the last_at of each chat; a media
  * pass fetches some media files of synced messages. The message pass ends
  * after three quarters of the time box, so the media pass always gets the
- * rest. A sync only adds rows and files: it never marks, changes or removes
- * them (I20.1).
+ * rest. A sync adds messages and files, and it can fill in a chat name. It
+ * never marks, edits or removes a message (I20.1).
  *
- * arch: D25.1
- * arch: D20.2 (I20.1, I20.5, I20.7, I20.9, I20.10)
+ * The sync keeps the invariants I20.1, I20.5, I20.7, I20.9 and I20.10 of
+ * docs/DEVELOPER-GUIDE.md.
  */
 class SyncService {
 	/** Seconds of one run (I20.10). A test subclass can set a shorter box. */
@@ -63,7 +63,7 @@ class SyncService {
 	 * The counts of a failed run hold what was stored before the failure.
 	 *
 	 * @return array{skipped?:bool, chats:int, messages:int, media:int}
-	 * @throws ImportRunningException when an import or a sync already holds the source
+	 * @throws SourceBusyException when an import or a sync already holds the source
 	 */
 	public function run(Source $source): array {
 		$stats = ['chats' => 0, 'messages' => 0, 'media' => 0];
@@ -72,7 +72,7 @@ class SyncService {
 			return ['skipped' => true] + $stats;
 		}
 		if (!$this->sources->claim($source)) {
-			throw new ImportRunningException('import already running');
+			throw new SourceBusyException('an import or a sync of this source is running');
 		}
 		$start = microtime(true);
 		$this->messageDeadline = $start + static::BOX * static::MESSAGE_SHARE;
@@ -96,7 +96,7 @@ class SyncService {
 				'file' => $e->getFile(),
 				'line' => $e->getLine(),
 			]);
-			$source->setSyncError('waha_bad_response');
+			$source->setSyncError('sync_failed');
 		} finally {
 			$source->setImportState(null);
 			$source->setImportSince(null);
@@ -138,8 +138,10 @@ class SyncService {
 	}
 
 	/**
-	 * The checks before a sync, in the order of D25.1 step 2. The first
-	 * sync stores the account id of the session in sync_me.
+	 * The checks before a sync, in this order: the admin switch, the session
+	 * of the user, the session state, the account and the source folder. The
+	 * first check that fails throws its code. The first sync stores the
+	 * account id of the session in sync_me.
 	 *
 	 * @return Folder the source folder
 	 * @throws WahaException
@@ -155,12 +157,8 @@ class SyncService {
 		if ($state['status'] !== 'WORKING') {
 			throw new WahaException('waha_session_state');
 		}
-		$me = WahaMapper::jid($state['me']);
-		$known = $source->getSyncMe();
-		if ($known !== null && $me !== $known) {
-			throw new WahaException('waha_account_changed');
-		}
-		if ($known === null && $me !== null) {
+		$me = WahaMapper::account($source->getSyncMe(), $state['me']);
+		if ($me !== null) {
 			$source->setSyncMe($me);
 		}
 		return $this->sourceFolder($source);

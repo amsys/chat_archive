@@ -1,7 +1,8 @@
 // Collects every t('chat_archive', '...') string from src/ and $this->l->t('...') from lib/,
 // adds missing keys to each l10n/<lang>.json with an empty translation, drops keys that no
 // longer exist, and writes the l10n/<lang>.js file Nextcloud loads in the browser.
-// Usage: node scripts/l10n.mjs [--check]   (--check fails when a translation is missing)
+// Usage: node scripts/l10n.mjs [--check]
+// With --check the script writes no file. It exits 1 when a German text is missing or empty.
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -27,6 +28,7 @@ for (const file of [...walk('src'), ...walk('lib')]) {
 	}
 }
 
+const check = process.argv.includes('--check')
 let missing = 0
 for (const file of readdirSync('l10n').filter((f) => f.endsWith('.json'))) {
 	const lang = file.slice(0, -5)
@@ -36,8 +38,11 @@ for (const file of readdirSync('l10n').filter((f) => f.endsWith('.json'))) {
 		translations[s] = old.translations?.[s] ?? ''
 		if (translations[s] === '') {
 			missing++
-			console.log(`${lang}: missing "${s}"`)
+			console.log(`${file}: missing "${s}"`)
 		}
+	}
+	if (check) {
+		continue
 	}
 	const out = { translations, pluralForm: old.pluralForm ?? 'nplurals=2; plural=(n != 1);' }
 	writeFileSync(join('l10n', file), JSON.stringify(out, null, 4) + '\n')
@@ -45,6 +50,6 @@ for (const file of readdirSync('l10n').filter((f) => f.endsWith('.json'))) {
 	writeFileSync(join('l10n', `${lang}.js`), `OC.L10N.register(\n    "chat_archive",\n    ${JSON.stringify(done, null, 4).replace(/\n/g, '\n    ')},\n"${out.pluralForm}");\n`)
 }
 console.log(`${strings.size} strings`)
-if (process.argv.includes('--check') && missing > 0) {
+if (check && missing > 0) {
 	process.exit(1)
 }

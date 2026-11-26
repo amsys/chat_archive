@@ -18,7 +18,7 @@ namespace OCA\ChatArchive\Source;
  *           'from_me' => bool, 'video' => bool, 'duration_s' => ?int, 'result' => ?string]
  *
  * media.suspicious: the platform's own verdict on the file; any value > 0 means
- * flagged; the meanings of the values are not known. arch: D2.1
+ * flagged; the meanings of the values are not known.
  */
 interface IBackupReader {
 	/** @return iterable<array<string, mixed>> */

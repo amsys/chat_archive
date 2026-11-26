@@ -1,11 +1,10 @@
 <!--
   Personal settings page: the sources, then the preferences.
-  arch: D27.1
 -->
 <template>
 	<NcSettingsSection
 		:name="t('chat_archive', 'Chat Archive')"
-		:description="t('chat_archive', 'WhatsApp writes the full backup about once a week. The archive imports it when it arrives.')">
+		:description="t('chat_archive', 'WhatsApp writes the full backup every night. The archive imports it when it arrives.')">
 		<h3>{{ t('chat_archive', 'Sources') }}</h3>
 		<NcNoteCard v-if="loadError" type="error">
 			{{ loadError }}
@@ -26,7 +25,10 @@
 				:modelValue="preserve"
 				:loading="preserveBusy"
 				@update:modelValue="savePreserve">
-				{{ t('chat_archive', 'Preserve the archive (copy a moved file back when it is deleted; never remove a source)') }}
+				{{ t('chat_archive', 'Preserve the archive') }}
+				<template #description>
+					{{ t('chat_archive', 'When a file that the archive moved is deleted, the archive copies it back. A source cannot be removed.') }}
+				</template>
 			</NcCheckboxRadioSwitch>
 			<p v-if="preserveError" class="ca-pref__error" role="alert">
 				{{ preserveError }}

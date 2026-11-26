@@ -1,3 +1,4 @@
+// Entry of the settings pages: mounts the personal page or the admin page.
 import { createApp } from 'vue'
 import Admin from './views/Admin.vue'
 import Settings from './views/Settings.vue'

@@ -1,5 +1,8 @@
 <?php
+// Checks Crypt15: the fixture decrypts to the plain database, and a wrong
+// key, a short key and a corrupt file each fail with an exception.
 declare(strict_types=1);
+require __DIR__ . '/../lib/Service/ImportException.php';
 require __DIR__ . '/../lib/Source/WhatsApp/Crypt15.php';
 require __DIR__ . '/../lib/Source/WhatsApp/MemDb.php';
 use OCA\ChatArchive\Source\WhatsApp\Crypt15;
@@ -43,12 +46,11 @@ assert(hash_file('sha256', $out) === hash_file('sha256', "$fx/msgstore.db"), 'sh
 @unlink($out);
 /**
  * MemDb case: decrypt into SQLite memory, read every page back and compare
- * with the plaintext fixture (I1.2). Page 1 changes in bytes 18/19 (set to 1)
+ * with the plaintext fixture. Page 1 changes in bytes 18/19 (set to 1)
  * and in the header fields that SQLite writes on COMMIT (24-27, 92-99).
- * arch: D1.1, D1.2, D7.2, D7.4
  */
 $encSize = filesize("$fx/msgstore.db.crypt15");
-$mem = new MemDb($encSize * 1032); // finding 4: same bound WhatsAppProvider::open() uses
+$mem = new MemDb($encSize * 1032); // the same bound that WhatsAppProvider::open() uses
 $in = fopen("$fx/msgstore.db.crypt15", 'rb');
 Crypt15::decryptTo($in, $mem->write(...), trim(file_get_contents("$fx/key.hex")), $encSize);
 fclose($in);

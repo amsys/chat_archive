@@ -76,7 +76,7 @@ echo "creating source over OCS..."
 KEY=$(cat tests/fixtures/key.hex)
 api /settings/sources -X POST -d provider=whatsapp -d label=Test -d folder=/WhatsApp -d secret="$KEY" -d onDelete=restore > "$TMP/ca_src.json"
 SID=$(python3 -c "import json;print(json.load(open('$TMP/ca_src.json'))['ocs']['data']['id'])")
-python3 -c "import json;d=json.load(open('$TMP/ca_src.json'))['ocs']['data'];assert d['hasSecret'] and d['folder']=='/WhatsApp', d"
+python3 -c "import json;d=json.load(open('$TMP/ca_src.json'))['ocs']['data'];assert d['hasSecret'] and d['folder']=='/WhatsApp', d" || fail "the new source does not report its key and folder"
 api /settings/sources -X POST -d provider=whatsapp -d label=Bad -d folder=/WhatsApp -d secret=short -d onDelete=restore >/dev/null 2>&1 && fail "bad key accepted"
 api /settings/sources -X POST -d provider=telegram -d label=Bad -d folder=/WhatsApp -d onDelete=restore >/dev/null 2>&1 && fail "unknown provider accepted"
 
@@ -87,9 +87,8 @@ echo "$OUT" | grep -q '"chats":2,"messages":8,"calls":2,"linked":1' || fail "une
 OUT2=$(occ chat_archive:import --user admin)
 echo "$OUT2" | grep -q '"skipped":true' || fail "second run should skip an unchanged backup"
 
-echo "preserve on: the server refuses to remove a source (D34.4)..."
-# arch: D34.4
-# The preserve switch defaults on (D29.3) and no value is stored yet.
+echo "preserve on: the server refuses to remove a source..."
+# The preserve switch defaults on and no value is stored yet.
 CODE=$(curl -s -o "$TMP/ca_del.json" -w '%{http_code}' "${AUTH[@]}" "${OCS[@]}" -X DELETE "$BASE/ocs/v2.php/apps/chat_archive/settings/sources/$SID?format=json")
 [ "$CODE" = 409 ] || fail "delete with preserve on did not answer 409 (got $CODE)"
 python3 -c "import json;d=json.load(open('$TMP/ca_del.json'))['ocs']['data'];assert d['code']=='preserve_on',d" || fail "delete with preserve on did not give code preserve_on"
@@ -107,7 +106,7 @@ $CTR exec $NAME php -r "
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${OCS[@]}" -X DELETE "$BASE/ocs/v2.php/apps/chat_archive/settings/sources/$SID?format=json")
 [ "$CODE" = 409 ] || fail "delete during a running import did not answer 409 (got $CODE)"
 OUT3=$(occ chat_archive:import --user admin --source "$SID" --force)
-echo "$OUT3" | grep -q 'import already running' || fail "import while running did not report already running: $OUT3"
+echo "$OUT3" | grep -q 'an import or a sync is running' || fail "import while running did not report a running import or sync: $OUT3"
 $CTR exec $NAME php -r "
 \$pdo = new PDO('sqlite:/var/www/html/data/nc.db');
 \$pdo->prepare('UPDATE ${PREFIX}chatarchive_source SET import_state = NULL, import_since = NULL WHERE id = ?')
@@ -118,14 +117,14 @@ echo "wrong key: import fails, the error lands on the source row..."
 api /settings/sources -X POST -d provider=whatsapp -d label=WrongKey -d folder=/WhatsApp -d secret="$(printf 'ab%.0s' {1..32})" -d onDelete=restore > "$TMP/ca_src2.json"
 SID2=$(python3 -c "import json;print(json.load(open('$TMP/ca_src2.json'))['ocs']['data']['id'])")
 occ chat_archive:import --user admin --source "$SID2" --force >/dev/null 2>&1 && fail "wrong key import returned success"
-# a failed import must not leave the decrypted database, or a SQLite temp-file spill, on disk (I6.2)
+# a failed import must not leave the decrypted database, or a SQLite temp-file spill, on disk
 LEFT=$($CTR exec $NAME find /tmp /var/tmp -name msgstore.db -o -name 'etilqs_*')   # no pipe: grep -q would SIGPIPE find, see the app:list line
 [ -z "$LEFT" ] || fail "decrypted database or a SQLite temp file left behind after a failed import: $LEFT"
 api /settings/sources | python3 -c "
 import json,sys
 s=[x for x in json.load(sys.stdin)['ocs']['data']['sources'] if x['id']==$SID2][0]
-assert 'wrong key' in (s['lastError'] or ''), s
-assert s['importState'] is None and s['lastSynced'] is None, s"
+assert s['lastError'] == 'wrong_key', s
+assert s['importState'] is None and s['lastSynced'] is None, s" || fail "wrong key: the source row does not hold the code wrong_key"
 api "/settings/sources/$SID2" -X DELETE >/dev/null
 
 echo "PUT backup file via WebDAV queues ImportSourceJob..."
@@ -133,14 +132,14 @@ dav "/WhatsApp/msgstore.db.crypt15" -T tests/fixtures/msgstore.db.crypt15
 occ background-job:list --class='OCA\ChatArchive\Cron\ImportSourceJob' | grep -q "$SID" || fail "ImportSourceJob not queued for sourceId $SID"
 
 echo "import state..."
-api "/settings/sources/$SID/import" -X POST | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['importState']=='queued' and d['importSince'],d"
-api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['sources'][0];assert d['importState']=='queued',d"
+api "/settings/sources/$SID/import" -X POST | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['importState']=='queued' and d['importSince'],d" || fail "POST import did not queue the source"
+api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['sources'][0];assert d['importState']=='queued',d" || fail "the source list does not show the queued state"
 occ chat_archive:import --user admin >/dev/null
-api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['sources'][0];assert d['importState'] is None and d['importSince'] is None,d"
+api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['sources'][0];assert d['importState'] is None and d['importSince'] is None,d" || fail "the import did not clear the queued state"
 
 echo "querying..."
 api "/api/sources/$SID/chats" > "$TMP/ca_chats.json"
-python3 - <<PY
+python3 - <<PY || fail "unexpected chat list after the import"
 import json
 chats = json.load(open('$TMP/ca_chats.json'))['ocs']['data']
 assert len(chats) == 2, chats
@@ -152,7 +151,7 @@ open('$TMP/ca_group_id', 'w').write(str(byname['Family group']['id']))
 PY
 CID=$(cat "$TMP/ca_chat_id")
 api "/api/chats/$CID/messages" > "$TMP/ca_msgs.json"
-python3 - <<PY
+python3 - <<PY || fail "unexpected message rows after the import"
 import json
 d = json.load(open('$TMP/ca_msgs.json'))['ocs']['data']
 m = d['messages']
@@ -161,26 +160,28 @@ assert d['senders'].get('23000001@s.whatsapp.net') == '+23000001', d['senders']
 md = m[2]['media']
 assert md['exists'] and md['path'] == '/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg', md
 assert md['caption'] == 'a photo' and md['fileId'], md
-assert md['suspicious'] is True, md                               # WhatsApp's own verdict, kept (F1)
+assert md['suspicious'] is True, md                               # WhatsApp's own verdict, kept
 assert md['hasPreview'] is False, md                              # a flagged file is never previewed, even a jpg
 assert md['realName'] == 'IMG-20240830-WA0001.jpg', md            # the real file name, not the backup's claim
-assert '‮' not in (md['fileName'] or '') and '‮' not in md['realName'], md  # the API returns fileName without bidi override
+assert '\u202e' not in (md['fileName'] or '') and '\u202e' not in md['realName'], md  # the API returns fileName without bidi override
 assert m[0]['call'] is None, m[0]
 assert m[3]['body'] is None and m[3]['call'] == {'video': False, 'result': 'connected', 'durationS': 65}, m[3]
 assert m[4]['call'] == {'video': True, 'result': 'missed', 'durationS': None}, m[4]
 PY
 
-# Verify the database still stores file_name raw with U+202E (D4.2: output is cleaned, stored value is not)
+# Verify the database still stores file_name raw with U+202E (output is cleaned, stored value is not)
+# U+202E as its UTF-8 bytes: the file holds no literal bidi control, and no locale changes the bytes
+RLO=$'\xe2\x80\xae'
 $CTR exec $NAME php -r "
 \$pdo = new PDO('sqlite:/var/www/html/data/nc.db');
-\$stmt = \$pdo->prepare('SELECT file_name FROM ${PREFIX}chatarchive_media WHERE file_name LIKE \"%‮%\" LIMIT 1');
+\$stmt = \$pdo->prepare('SELECT file_name FROM ${PREFIX}chatarchive_media WHERE file_name LIKE \"%${RLO}%\" LIMIT 1');
 \$stmt->execute();
 \$row = \$stmt->fetch(PDO::FETCH_ASSOC);
 if (!\$row) { echo 'FAIL: no U+202E found in chatarchive_media.file_name' . PHP_EOL; exit(1); }
 echo 'OK: stored file_name still has U+202E' . PHP_EOL;
 " || fail "stored file_name does not retain U+202E"
 
-echo "backfill: a value cleared from the flagged row returns on the next forced import (D2.3)..."
+echo "backfill: a value cleared from the flagged row returns on the next forced import..."
 $CTR exec $NAME php -r "
 \$pdo = new PDO('sqlite:/var/www/html/data/nc.db');
 \$pdo->prepare('UPDATE ${PREFIX}chatarchive_media SET suspicious = NULL WHERE source_id = ?')->execute([$SID]);
@@ -191,7 +192,7 @@ api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.st
 
 echo "hostile backup text is cleaned on import..."
 api "/api/chats/$(cat "$TMP/ca_group_id")/messages" > "$TMP/ca_group.json"
-python3 - <<PY
+python3 - <<PY || fail "hostile backup text was not cleaned on import"
 import json
 m = json.load(open('$TMP/ca_group.json'))['ocs']['data']['messages'][2]
 assert m['body'] == 'caf\u00e9 bad ?bytes', repr(m['body'])   # NUL dropped, invalid byte replaced
@@ -205,12 +206,12 @@ search() { api /api/search -G "$@" | python3 -c "import json,sys;d=json.load(sys
 [ "$(search -d kind=image)" = "2 False ['image'] [{'name': '+23000001', 'sourceId': $SID}, {'name': 'Family group', 'sourceId': $SID}]" ] || fail "kind=image: $(search -d kind=image)"
 [ "$(search -d q=invoice)" = "1 False ['document'] [{'name': 'Family group', 'sourceId': $SID}]" ] || fail "file name match"
 [ "$(search -d kind=call -d "chat=$CID")" = "2 False ['call_log', 'missed_call'] [{'name': '+23000001', 'sourceId': $SID}]" ] || fail "kind=call in chat"
-api /api/search -G -d kind=call -d "chat=$CID" | python3 -c "import json,sys;m=json.load(sys.stdin)['ocs']['data']['messages'];assert all(x['call'] for x in m),m"
+api /api/search -G -d kind=call -d "chat=$CID" | python3 -c "import json,sys;m=json.load(sys.stdin)['ocs']['data']['messages'];assert all(x['call'] for x in m),m" || fail "a call hit of the search has no call data"
 [ "$(search -d kind=media -d from=1725000000000 -d to=1725000000000)" = "0 False [] []" ] || fail "date range excludes"
 [ "$(search -d q=alice -d from=1725000000000 -d to=1725000000000)" = "1 False ['text'] [{'name': '+23000001', 'sourceId': $SID}]" ] || fail "date range includes"
 [ "$(search -d source=999999 -d q=alice)" = "0 False [] []" ] || fail "foreign source leaks"
 [ "$(search)" = "0 False [] []" ] || fail "empty search returns rows"
-api "/api/sources/$SID/calls" | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert len(d)==2 and d[1]['result']=='connected',d"
+api "/api/sources/$SID/calls" | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert len(d)==2 and d[1]['result']=='connected',d" || fail "unexpected call list of the source"
 
 echo "call list resolves a contact name in one batch..."
 # a short TEL ("0001") must not match the peer 23000001 only because the peer ends with it
@@ -222,7 +223,7 @@ import json, sys
 d = json.load(sys.stdin)['ocs']['data']
 byPeer = {c['peer']: c['peerName'] for c in d}
 assert byPeer['23000001@s.whatsapp.net'] == '+23000001', d
-"
+" || fail "a short TEL number matched the peer by its last digits"
 curl -sf "${AUTH[@]}" -X DELETE "$BASE/remote.php/dav/addressbooks/users/admin/contacts/ca-short.vcf" >/dev/null
 curl -sf "${AUTH[@]}" -X PUT "$BASE/remote.php/dav/addressbooks/users/admin/contacts/ca-test.vcf" \
   -H "Content-Type: text/vcard" \
@@ -234,7 +235,7 @@ byPeer = {c['peer']: c['peerName'] for c in d}
 assert byPeer['23000001@s.whatsapp.net'] == 'Alice Contact', d      # matched by CardDAV TEL
 other = [c for c in d if c['peer'] != '23000001@s.whatsapp.net'][0]
 assert other['peerName'] != 'Alice Contact', d                      # group peer keeps its own fallback
-"
+" || fail "the call list does not show the CardDAV contact name"
 curl -sf "${AUTH[@]}" -X DELETE "$BASE/remote.php/dav/addressbooks/users/admin/contacts/ca-test.vcf" >/dev/null
 
 # These grep a whole HTML page, which is far bigger than the pipe buffer.
@@ -257,7 +258,7 @@ m = re.search(r'initial-state-chat_archive-clickAction\" value=\"([^\"]+)\"', sy
 assert m, 'clickAction state missing from the app page'
 assert json.loads(base64.b64decode(m.group(1))) == {'action': 'nc', 'template': 'myhandler://{path}'}
 " || fail "click action not read from pre-existing storage"
-api /settings/click -X PUT -d action=custom -d template='myhandler://{path}' | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d=={'action':'custom','template':'myhandler://{path}'},d"
+api /settings/click -X PUT -d action=custom -d template='myhandler://{path}' | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d=={'action':'custom','template':'myhandler://{path}'},d" || fail "PUT /settings/click did not store the custom action"
 curl -sf "${AUTH[@]}" "$BASE/index.php/apps/chat_archive/" | python3 -c "
 import base64,json,re,sys
 m = re.search(r'initial-state-chat_archive-clickAction\" value=\"([^\"]+)\"', sys.stdin.read())
@@ -265,8 +266,12 @@ assert m, 'clickAction state missing from the app page'
 assert json.loads(base64.b64decode(m.group(1))) == {'action': 'custom', 'template': 'myhandler://{path}'}
 " || fail "click action not in the app page state"
 api /settings/click -X PUT -d action=custom -d template='javascript:alert(1)' >/dev/null 2>&1 && fail "javascript: template accepted"
+CODE=$(curl -s -o "$TMP/ca_click.json" -w '%{http_code}' "${AUTH[@]}" "${OCS[@]}" -X PUT "$BASE/ocs/v2.php/apps/chat_archive/settings/click?format=json" \
+  -d action=custom -d template='javascript:alert(1)')
+[ "$CODE" = 400 ] || fail "a javascript: template did not answer 400 (got $CODE)"
+python3 -c "import json;d=json.load(open('$TMP/ca_click.json'))['ocs']['data'];assert d['code']=='bad_click_action',d" || fail "a javascript: template did not give code bad_click_action"
 api /settings/click -X PUT -d action=bogus >/dev/null 2>&1 && fail "unknown click action accepted"
-api /settings/click -X PUT -d action=view | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['action']=='view',d"
+api /settings/click -X PUT -d action=view | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['action']=='view',d" || fail "PUT /settings/click did not store the view action"
 
 echo "german translation is loaded..."
 occ user:setting admin core lang de
@@ -299,6 +304,17 @@ usearch() { curl -sf "${AUTH[@]}" "${OCS[@]}" "$BASE/ocs/v2.php/search/providers
 FIRST_ENTRY=$(curl -sf "${AUTH[@]}" "${OCS[@]}" "$BASE/ocs/v2.php/search/providers/chat_archive_messages/search?format=json" -G -d term=alice | python3 -c "import json,sys;entries=json.load(sys.stdin)['ocs']['data']['entries'];print(entries[0]['title'] if entries else '')")
 [ "$FIRST_ENTRY" = "+23000001" ] || fail "first alice entry title: $FIRST_ENTRY"
 
+# The entry links to the app with the source, chat, message id and time of the hit (App.vue opens the chat there)
+curl -sf "${AUTH[@]}" "${OCS[@]}" "$BASE/ocs/v2.php/search/providers/chat_archive_messages/search?format=json" -G -d term=invoice | python3 -c "
+import json,sys,urllib.parse as u
+e = json.load(sys.stdin)['ocs']['data']['entries'][0]
+url = u.urlsplit(e['resourceUrl'])
+q = {k: v[0] for k, v in u.parse_qs(url.query).items()}
+assert url.path.endswith('/apps/chat_archive/'), url
+assert sorted(q) == ['at', 'chat', 'msg', 'source'] and all(v.isdigit() for v in q.values()), q
+assert q['source'] == '$SID' and q['at'] == '1725000180000', q   # K4, the invoice document
+" || fail "unified search entry does not link to its message"
+
 # usearch term=invoice should return 1
 [ "$(usearch -d term=invoice)" = "1" ] || fail "usearch invoice: $(usearch -d term=invoice)"
 
@@ -320,7 +336,7 @@ echo "a later backup (v2): deleted, revoked and edited messages, a gone chat, a 
 # The expected stats come from the fixture script header, so the two cannot drift apart.
 V2STATS=$(sed -n '/^Expected stats of a forced import of v2/{n;s/^ *//;p;}' tests/fixtures/make_fixture.py)
 case "$V2STATS" in *'"linked":0,"deleted":'*'"gone_chats":'*) ;; *) fail "no v2 stats line in the make_fixture.py header: '$V2STATS'" ;; esac
-# The toggles have no stored value yet: the defaults are ON (D6.I9).
+# The toggles have no stored value yet: the defaults are ON.
 curl -sf "${AUTH[@]}" "$BASE/index.php/apps/chat_archive/" | python3 -c "
 import base64,json,re,sys
 m = re.search(r'initial-state-chat_archive-viewPrefs\" value=\"([^\"]+)\"', sys.stdin.read())
@@ -344,7 +360,7 @@ assert a['phoneArchived'] is True and a['goneAt'] is None, a
 assert b['phoneArchived'] is True and isinstance(b['goneAt'], int), b
 assert a['msgCount'] == 5 and b['msgCount'] == 3, c
 " || fail "v2 chat rows"
-# message rows, defaults on: all 5 rows show. Body and kind do not change (D6.I1).
+# message rows, defaults on: all 5 rows show. Body and kind do not change.
 api "/api/chats/$CID/messages" > "$TMP/ca_v2.json"
 python3 - <<PY || fail "v2 message rows"
 import json
@@ -370,14 +386,14 @@ assert len(e) == 1 and e[0]['body'] == 'hello from alice, edited' and isinstance
 " || fail "edits route"
 api "/api/messages/$(cat "$TMP/ca_k8")/edits" | python3 -c "import json,sys;e=json.load(sys.stdin)['ocs']['data']['edits'];assert e==[],e" || fail "edits route for an unedited message"
 
-echo "safe re-run: the same v2 backup again adds no marks and no edit rows (D6.I2)..."
+echo "safe re-run: the same v2 backup again adds no marks and no edit rows..."
 EDITS=$(edit_rows)
 OUT=$(occ chat_archive:import --user admin --force)
 echo "$OUT"
 echo "$OUT" | grep -F '"chats":1,"messages":0,"calls":0,"linked":0,"deleted":0,"revoked":0,"edited":0,"gone_chats":0' >/dev/null || fail "second forced v2 import changed marks"
 [ "$(edit_rows)" = "$EDITS" ] || fail "second forced v2 import added edit rows ($EDITS -> $(edit_rows))"
 
-echo "skip path: an unchanged backup does no compare and no marks (D6.I6)..."
+echo "skip path: an unchanged backup does no compare and no marks..."
 api "/api/sources/$SID/chats" > "$TMP/ca_before_chats.json"
 api "/api/chats/$CID/messages" > "$TMP/ca_before_msgs.json"
 OUT=$(occ chat_archive:import --user admin)
@@ -388,7 +404,7 @@ case "$OUT" in *'"deleted"'*|*'"revoked"'*|*'"edited"'*|*'"gone_chats"'*) fail "
 [ "$(api "/api/chats/$CID/messages")" = "$(cat "$TMP/ca_before_msgs.json")" ] || fail "skip path changed message rows"
 [ "$(edit_rows)" = "$EDITS" ] || fail "skip path added edit rows"
 
-echo "view toggles filter the in-app page and search only (D6.I3, D6.I9)..."
+echo "view toggles filter the in-app page and search only..."
 view() { api /settings/view -X PUT -H 'Content-Type: application/json' -d "$1" | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];print(d['showDeleted'],d['showArchived'])"; }
 nmsgs() { api "/api/chats/$CID/messages" | python3 -c "import json,sys;print(len(json.load(sys.stdin)['ocs']['data']['messages']))"; }
 # defaults on: everything shows, a gone chat included
@@ -412,12 +428,32 @@ nmsgs() { api "/api/chats/$CID/messages" | python3 -c "import json,sys;print(len
 [ "$(view '{"showDeleted":true,"showArchived":true}')" = "True True" ] || fail "PUT /settings/view back on"
 [ "$(search -d q=alice)" = "2 False ['text'] [{'name': '+23000001', 'sourceId': $SID}]" ] || fail "toggles back on: search alice: $(search -d q=alice)"
 
-echo "v1 back in place: missing and gone marks clear, revoked stays (D6.I5)..."
+echo "v1 back in place: missing and gone marks clear, revoked stays..."
+# K9 as the live sync stores a photo: no body, its text in the media caption, not in a backup yet.
+# The backup gives the same text as the body. That is no edit.
+k9_sql() { $CTR exec $NAME php -r "
+\$pdo = new PDO('sqlite:/var/www/html/data/nc.db');
+\$id = \$pdo->query(\"SELECT id FROM ${PREFIX}chatarchive_message WHERE source_id = $SID AND platform_msg_id = 'K9'\")->fetchColumn();
+$1
+"; }
+k9_sql "
+\$k9 = \$pdo->query(\"SELECT body FROM ${PREFIX}chatarchive_message WHERE id = \$id\")->fetchColumn();
+file_put_contents('/tmp/ca_k9_caption', \$pdo->query(\"SELECT caption FROM ${PREFIX}chatarchive_media WHERE message_id = \$id\")->fetchColumn());
+file_put_contents('/tmp/ca_k9_body', \$k9);
+\$pdo->prepare('UPDATE ${PREFIX}chatarchive_media SET caption = ? WHERE message_id = ?')->execute([\$k9, \$id]);
+\$pdo->prepare('UPDATE ${PREFIX}chatarchive_message SET body = NULL, seen_hash = ?, in_backup = 0 WHERE id = ?')->execute([sha1(\"\\0null\"), \$id]);
+" || fail "could not set up K9 as a synced photo"
 dav "/WhatsApp/msgstore.db.crypt15" -T tests/fixtures/msgstore.db.crypt15
 OUT=$(occ chat_archive:import --user admin --force)
 echo "$OUT"
-# K1 reads its v1 text again, which is a new version after the v2 text (D3.2 rule 3)
+# K1 reads its v1 text again, which is a new version after the v2 text. K9 is no edit.
 echo "$OUT" | grep -F '"chats":2,"messages":0,"calls":0,"linked":0,"deleted":0,"revoked":0,"edited":1,"gone_chats":0' >/dev/null || fail "unexpected v1 restore stats"
+[ "$(k9_sql "echo \$pdo->query(\"SELECT COALESCE(edited_at, 'none') || ' ' || in_backup || ' ' || (SELECT COUNT(*) FROM ${PREFIX}chatarchive_edit WHERE message_id = \$id) FROM ${PREFIX}chatarchive_message WHERE id = \$id\")->fetchColumn();")" = "none 1 0" ] \
+  || fail "the first backup of a synced photo recorded an edit"
+k9_sql "
+\$pdo->prepare('UPDATE ${PREFIX}chatarchive_media SET caption = ? WHERE message_id = ?')->execute([file_get_contents('/tmp/ca_k9_caption'), \$id]);
+\$pdo->prepare('UPDATE ${PREFIX}chatarchive_message SET body = ? WHERE id = ?')->execute([file_get_contents('/tmp/ca_k9_body'), \$id]);
+" || fail "could not restore K9"
 api "/api/sources/$SID/chats" | python3 -c "
 import json,sys
 c = {x['id']: x for x in json.load(sys.stdin)['ocs']['data']}
@@ -449,7 +485,7 @@ other "/settings/sources/$SID/import" -X POST | grep -q '"statuscode":404' || fa
 [ "$(other /api/search -G -d "source=$SID" -d q=alice | python3 -c "import json,sys;print(len(json.load(sys.stdin)['ocs']['data']['messages']))")" = 0 ] || fail "user1 searched admin's source"
 [ "$(other /api/search -G -d q=alice | python3 -c "import json,sys;print(len(json.load(sys.stdin)['ocs']['data']['messages']))")" = 0 ] || fail "user1 searched admin's messages across sources"
 [ "$(curl -sf -u user1:Ca-Test-User1-2026x "${OCS[@]}" "$BASE/ocs/v2.php/search/providers/chat_archive_messages/search?format=json" -G -d term=alice | python3 -c "import json,sys;print(len(json.load(sys.stdin)['ocs']['data']['entries']))")" = 0 ] || fail "user1 unified search alice: $(curl -sf -u user1:Ca-Test-User1-2026x "${OCS[@]}" "$BASE/ocs/v2.php/search/providers/chat_archive_messages/search?format=json" -G -d term=alice | python3 -c "import json,sys;print(len(json.load(sys.stdin)['ocs']['data']['entries']))")"
-other /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['sources']==[],d"
+other /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['sources']==[],d" || fail "user1 sees the sources of admin"
 other "/settings/sources/$SID" -X PUT -d provider=whatsapp -d label=Stolen -d folder=/ -d onDelete=keep | grep -q '"statuscode":404' || fail "user1 edited admin's source"
 other "/settings/sources/$SID" -X DELETE | grep -q '"statuscode":404' || fail "user1 deleted admin's source"
 
@@ -461,11 +497,11 @@ occ files:scan user1 >/dev/null
 other /settings/sources -X POST -d provider=whatsapp -d label=Mine -d folder=/WA -d secret="$KEY" -d onDelete=restore > "$TMP/ca_src_u1.json"
 SID_U1=$(python3 -c "import json;print(json.load(open('$TMP/ca_src_u1.json'))['ocs']['data']['id'])")
 occ chat_archive:import --user user1 --force | grep -q '"chats":2,"messages":8,"calls":2,"linked":0' || fail "user1 import stats"
-other "/api/sources/$SID_U1/chats" | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert len(d)==2 and {c['msgCount'] for c in d}=={5,3},d"
+other "/api/sources/$SID_U1/chats" | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert len(d)==2 and {c['msgCount'] for c in d}=={5,3},d" || fail "unexpected chat rows of user1"
 [ "$(other /api/search -G -d q=alice | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];print(len(d['messages']), {c['sourceId'] for c in d['chats'].values()})")" = "2 {$SID_U1}" ] || fail "user1 search"
 [ "$(search -d q=alice)" = "2 False ['text'] [{'name': '+23000001', 'sourceId': $SID}]" ] || fail "admin search sees user1 rows"
 curl -s "${AUTH[@]}" "${OCS[@]}" "$BASE/ocs/v2.php/apps/chat_archive/api/sources/$SID_U1/chats?format=json" | grep -q '"statuscode":404' || fail "admin read user1's chats"
-api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['sources'];assert [x['id'] for x in d]==[$SID],d"
+api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['sources'];assert [x['id'] for x in d]==[$SID],d" || fail "the source list of admin does not hold only its own source"
 other /settings/preserve -X PUT -d preserve=false | grep -q '"preserve":false' || fail "user1 could not turn preserve off"
 other "/settings/sources/$SID_U1" -X DELETE >/dev/null
 other "/api/sources/$SID_U1/chats" | grep -q '"statuscode":404' || fail "user1 source still readable after delete"
@@ -474,27 +510,27 @@ other "/api/sources/$SID_U1/chats" | grep -q '"statuscode":404' || fail "user1 s
 echo "reorganizing: the whole media folder moves out of the source (pointer must follow, re-import must not touch it)..."
 dav "/Archive" -X MKCOL
 dav "/WhatsApp/Media/WhatsApp%20Images" -X MOVE -H "Destination: $BASE/remote.php/dav/files/admin/Archive/2024"
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/Archive/2024/IMG-20240830-WA0001.jpg',md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/Archive/2024/IMG-20240830-WA0001.jpg',md" || fail "pointer did not follow the folder move"
 occ chat_archive:import --user admin --force | grep -q '"chats":2,"messages":0,"calls":0,"linked":0' || fail "re-import after the folder move added rows or relinked"
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/Archive/2024/IMG-20240830-WA0001.jpg',md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/Archive/2024/IMG-20240830-WA0001.jpg',md" || fail "re-import after the folder move changed the pointer"
 dav "/Archive/2024" -X MOVE -H "Destination: $BASE/remote.php/dav/files/admin/WhatsApp/Media/WhatsApp%20Images"
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md" || fail "pointer did not follow the folder move back"
 
 echo "moving the linked file elsewhere (pointer must follow)..."
 dav "/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg" -X MOVE -H "Destination: $BASE/remote.php/dav/files/admin/Moved/renamed.jpg"
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/Moved/renamed.jpg',md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/Moved/renamed.jpg',md" || fail "pointer did not follow the file move"
 
-echo "deleting it there (flagged file: on_delete=restore must not bring a copy back, I5.1)..."
+echo "deleting it there (flagged file: on_delete=restore must not bring a copy back)..."
 dav "/Moved/renamed.jpg" -X DELETE
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['suspicious'] is True and not md['exists'] and md['path'] is None,md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['suspicious'] is True and not md['exists'] and md['path'] is None,md" || fail "the pointer of the deleted flagged file did not clear"
 dav "/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg" -o /dev/null && fail "a copy of the flagged file was restored to the source path"
 # Put the file back where the rest of the script expects it, by hand: Nextcloud's own trash
 # restore, not the app's on_delete policy, so the keep/unlink checks below still have their file.
 occ trashbin:restore admin >/dev/null
 dav "/Moved/renamed.jpg" -X MOVE -H "Destination: $BASE/remote.php/dav/files/admin/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg"
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md" || fail "pointer did not follow the move back to the source folder"
 
-echo "a move into a share: the pointer stays valid (D29.2 P2)..."
+echo "a move into a share: the pointer stays valid..."
 # Nextcloud keeps the file id on a move between two local storages, so this
 # move does not change the id. The step checks that the rename listener
 # breaks nothing on a move across mounts.
@@ -506,7 +542,7 @@ api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.st
 dav "/ShareIn/x.jpg" -X MOVE -H "Destination: $BASE/remote.php/dav/files/admin/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg"
 api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md" || fail "pointer lost after the move back"
 
-echo "a move that changes the file id: the pointer follows (D29.2 P2)..."
+echo "a move that changes the file id: the pointer follows..."
 # No move in this container changes the id, so the step sends the two rename
 # events through the real dispatcher, with two real files as source and target.
 dav "/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg" -X COPY -H "Destination: $BASE/remote.php/dav/files/admin/Moved/copy.jpg"
@@ -528,11 +564,11 @@ dav "/Moved/copy.jpg" -X DELETE
 
 echo "keep policy: the pointer stays and a trash restore makes it valid again..."
 api "/settings/sources/$SID" -X PUT -d provider=whatsapp -d label=Test -d folder=/WhatsApp -d onDelete=keep \
-  | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['hasSecret'] and d['onDelete']=='keep',d"
+  | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['hasSecret'] and d['onDelete']=='keep',d" || fail "PUT source with onDelete=keep did not store the policy or kept no key"
 dav "/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg" -X DELETE
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert not md['exists'] and md['fileId'],md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert not md['exists'] and md['fileId'],md" || fail "keep policy: the pointer did not stay after the delete"
 occ trashbin:restore admin >/dev/null
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'] and md['path']=='/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg',md" || fail "keep policy: the trash restore did not make the pointer valid"
 
 echo "unlink policy..."
 api "/settings/sources/$SID" -X PUT -d provider=whatsapp -d label=Test -d folder=/WhatsApp -d onDelete=unlink >/dev/null
@@ -544,10 +580,9 @@ occ trashbin:restore admin >/dev/null
 api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert md['exists'],md" || fail "preserve on: trash restore did not bring the file back"
 api /settings/preserve -X PUT -d preserve=false >/dev/null
 dav "/WhatsApp/Media/WhatsApp%20Images/IMG-20240830-WA0001.jpg" -X DELETE
-api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert not md['exists'] and md['fileId'] is None,md"
+api "/api/chats/$CID/messages" | python3 -c "import json,sys;md=json.load(sys.stdin)['ocs']['data']['messages'][2]['media'];assert not md['exists'] and md['fileId'] is None,md" || fail "unlink policy: the pointer stayed after the delete"
 
-echo "live sync from a fake WAHA server (D32.1)..."
-# arch: D32.1
+echo "live sync from a fake WAHA server..."
 # tests/fixtures/waha_router.php runs in the container beside Nextcloud. It
 # serves chat A of the backup with K8 (a key the backup holds) and WAHA0001
 # (newer than the backup), and a group the backup does not hold with WAHA0002.
@@ -580,6 +615,11 @@ api /admin/waha -X PUT -H 'Content-Type: application/json' -d '{"enabled":true,"
 # Test connection asks the fake for /api/server/version with the saved URL and key.
 api /admin/waha/test -X POST | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['ok'] is True and d['engine']=='GOWS',d" || fail "POST /admin/waha/test against the fake WAHA"
 api /settings/sources | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data']['live'];assert d=={'enabled':True,'sessions':['default']},d" || fail "live sync state of the user"
+# A new live source needs a session. The request gives none, so the server refuses it.
+CODE=$(curl -s -o "$TMP/ca_live.json" -w '%{http_code}' "${AUTH[@]}" "${OCS[@]}" -X POST "$BASE/ocs/v2.php/apps/chat_archive/settings/sources?format=json" \
+  -d provider=whatsapp -d label=Live -d folder=/ -d onDelete=restore -d mode=live)
+[ "$CODE" = 400 ] || fail "a live source with no session did not answer 400 (got $CODE)"
+python3 -c "import json;d=json.load(open('$TMP/ca_live.json'))['ocs']['data'];assert d['code']=='session_required',d" || fail "a live source with no session did not give code session_required"
 api "/settings/sources/$SID" -X PUT -d provider=whatsapp -d label=Test -d folder=/WhatsApp -d onDelete=unlink -d syncSession=default -d tos=true \
   | python3 -c "import json,sys;d=json.load(sys.stdin)['ocs']['data'];assert d['syncSession']=='default' and isinstance(d['tosAt'],int),d" || fail "session not set on the source"
 # One row per key of the three WAHA messages: key, in_backup of the message, sender, deleted, chat id, in_backup of the chat, gone_at of the chat
@@ -603,7 +643,7 @@ assert w2 == ['WAHA0002', 0, '23000004@s.whatsapp.net', None, '23000009-17000000
 "; }
 OUT=$(occ chat_archive:sync) || fail "chat_archive:sync failed: $OUT"
 echo "$OUT"
-[ "$OUT" = '{"chats":2,"messages":2,"media":0}' ] || fail "unexpected sync stats: $OUT"
+[ "$OUT" = "{\"source\":$SID,\"chats\":2,\"messages\":2,\"media\":0}" ] || fail "unexpected sync stats: $OUT"
 check_waha_rows || fail "synced rows after the first sync"
 api /settings/sources | python3 -c "import json,sys;s=json.load(sys.stdin)['ocs']['data']['sources'][0];assert s['syncError'] is None and isinstance(s['syncAt'],int) and s['lastError'] is None,s" || fail "sync state on the source"
 api "/api/sources/$SID/chats" | python3 -c "
@@ -612,10 +652,16 @@ c = {x['platformChatId']: x for x in json.load(sys.stdin)['ocs']['data']}
 assert c['23000001@s.whatsapp.net']['msgCount'] == 6, c
 assert c['23000009-1700000000@g.us']['msgCount'] == 1 and c['23000009-1700000000@g.us']['goneAt'] is None, c
 " || fail "chat rows after the sync"
+# The backup names a private chat by its number. The sync stores the name that WAHA holds, and the chat list shows it.
+api "/api/sources/$SID/chats" | python3 -c "
+import json,sys
+c = {x['platformChatId']: x for x in json.load(sys.stdin)['ocs']['data']}
+assert c['23000001@s.whatsapp.net']['name'] == 'Anna from WhatsApp', c['23000001@s.whatsapp.net']['name']
+" || fail "the chat list does not show the name from WAHA"
 echo "a second sync over the same WAHA data adds nothing (I20.9)..."
 OUT=$(occ chat_archive:sync) || fail "second chat_archive:sync failed: $OUT"
 echo "$OUT"
-[ "$OUT" = '{"chats":0,"messages":0,"media":0}' ] || fail "second sync added rows: $OUT"
+[ "$OUT" = "{\"source\":$SID,\"chats\":0,\"messages\":0,\"media\":0}" ] || fail "second sync added rows: $OUT"
 check_waha_rows || fail "synced rows after the second sync"
 echo "realtime update of an open chat: off by default, then on..."
 # shellcheck disable=SC2016  # reason: the single quotes hold Python code
@@ -641,6 +687,11 @@ OUT=$(occ chat_archive:import --user admin --force)
 echo "$OUT"
 case "$OUT" in *'"deleted":0,'*'"gone_chats":0'*) ;; *) fail "forced import after a sync marked rows: $OUT" ;; esac
 check_waha_rows || fail "synced rows after a forced import"
+api "/api/sources/$SID/chats" | python3 -c "
+import json,sys
+c = {x['platformChatId']: x for x in json.load(sys.stdin)['ocs']['data']}
+assert c['23000001@s.whatsapp.net']['name'] == 'Anna from WhatsApp', c['23000001@s.whatsapp.net']['name']
+" || fail "a backup import put the number back in place of the name from WAHA"
 
 echo "removing the source cascades..."
 api /settings/fulltextsearch -X PUT -d enabled=true >/dev/null

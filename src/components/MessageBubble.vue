@@ -1,3 +1,7 @@
+<!--
+  One message in a chat: sender, text or call line, media, time, and the
+  marks for a deleted or edited message.
+-->
 <template>
 	<div
 		class="ca-msg"
@@ -16,7 +20,7 @@
 				{{ message.latestBody ?? message.body }}
 			</div>
 			<div v-else-if="!message.media && message.kind !== 'text'" class="ca-msg__kind">
-				{{ kindLabel }}
+				{{ kindLabel(message.kind) }}
 			</div>
 			<div class="ca-msg__meta">
 				<span v-if="message.deleted" class="ca-msg__chip" :title="deletedTitle">
@@ -64,22 +68,7 @@ import TrashCanOutline from 'vue-material-design-icons/TrashCanOutline.vue'
 import Video from 'vue-material-design-icons/Video.vue'
 import MediaView from './MediaView.vue'
 import { api } from '../api.js'
-import { callLabel, fmtDate, fmtDateTime, fmtTime } from '../util.js'
-
-const KIND_LABELS = {
-	system: t('chat_archive', 'System message'),
-	revoked: t('chat_archive', 'This message was deleted'),
-	sticker: t('chat_archive', 'Sticker'),
-	vcard: t('chat_archive', 'Contact card'),
-	vcard_array: t('chat_archive', 'Contact cards'),
-	location: t('chat_archive', 'Location'),
-	live_location: t('chat_archive', 'Live location'),
-	poll: t('chat_archive', 'Poll'),
-	group_invite: t('chat_archive', 'Group invite'),
-	view_once_image: t('chat_archive', 'View once photo'),
-	view_once_video: t('chat_archive', 'View once video'),
-	unsupported: t('chat_archive', 'Unsupported message'),
-}
+import { callLabel, fmtDate, fmtDateTime, fmtTime, kindLabel } from '../util.js'
 
 export default {
 	name: 'MessageBubble',
@@ -112,10 +101,6 @@ export default {
 			return c?.video ? Video : Phone
 		},
 
-		kindLabel() {
-			return KIND_LABELS[this.message.kind] ?? this.message.kind.replace(/_/g, ' ')
-		},
-
 		deletedTitle() {
 			return this.message.deleted === 'revoked'
 				? t('chat_archive', 'Deleted for everyone')
@@ -129,6 +114,7 @@ export default {
 		fmtDate,
 		fmtDateTime,
 		fmtTime,
+		kindLabel,
 
 		async onHistoryShown(shown) {
 			if (!shown || this.history !== null) {
@@ -196,7 +182,8 @@ export default {
 	gap: 6px;
 	color: var(--color-text-maxcontrast);
 }
-.ca-msg--deleted .ca-msg__body {
+.ca-msg--deleted .ca-msg__body,
+.ca-msg--deleted .ca-media {
 	opacity: 0.7;
 }
 .ca-msg__meta {

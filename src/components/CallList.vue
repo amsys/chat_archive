@@ -1,7 +1,11 @@
+<!--
+  Call history of one source: filters, a jump to a date, and one row per
+  call. A click on a row opens the chat at the time of the call.
+-->
 <template>
 	<div class="ca-calls">
 		<div class="ca-calls__head">
-			<h2>{{ t('chat_archive', 'Call Log') }}</h2>
+			<h2>{{ t('chat_archive', 'Calls') }}</h2>
 			<label class="ca-calls__jump">
 				{{ t('chat_archive', 'Jump to date') }}
 				<input type="date" @change="jumpDate($event.target.value)">
@@ -37,9 +41,9 @@
 				:name="t('chat_archive', 'No call matches')"
 				:description="t('chat_archive', 'Change the filters to see more calls.')" />
 			<template v-else>
-				<template v-for="(c, i) in rows" :key="c.id">
+				<template v-for="(c, i) in shown" :key="c.id">
 					<div
-						v-if="i === 0 || dayKey(c.startedAt) !== dayKey(rows[i - 1].startedAt)"
+						v-if="i === 0 || dayKey(c.startedAt) !== dayKey(shown[i - 1].startedAt)"
 						class="ca-day"
 						:data-day="dayKey(c.startedAt)">
 						{{ fmtRelDate(c.startedAt) }}
@@ -62,6 +66,7 @@
 						<span v-if="c.chat" class="ca-call__action">{{ t('chat_archive', 'Open the chat') }}</span>
 					</component>
 				</template>
+				<div v-if="rows.length > limit" :ref="observeSentinel" class="ca-calls__more" />
 			</template>
 		</div>
 	</div>
@@ -78,10 +83,14 @@ import { callLabel, dayKey, fmtDateTime, fmtRelDate, fmtTime } from '../util.js'
 const RESULTS = [
 	{ id: '', name: t('chat_archive', 'Any result') },
 	{ id: 'missed', name: t('chat_archive', 'Missed') },
+	{ id: 'no_answer', name: t('chat_archive', 'No answer') },
 	{ id: 'connected', name: t('chat_archive', 'Connected') },
 	{ id: 'rejected', name: t('chat_archive', 'Declined') },
 	{ id: 'failed', name: t('chat_archive', 'Failed') },
 ]
+// Rows in the page at the start, and rows that each step adds.
+const PAGE = 200
+
 const DIRECTIONS = [
 	{ id: '', name: t('chat_archive', 'Any direction') },
 	{ id: 'in', name: t('chat_archive', 'Incoming') },
@@ -101,6 +110,7 @@ export default {
 		results: RESULTS,
 		directions: DIRECTIONS,
 		f: { who: '', result: RESULTS[0], direction: DIRECTIONS[0] },
+		limit: PAGE, // number of rows in the page; it grows when the reader gets near the end
 	}),
 
 	computed: {
@@ -109,13 +119,7 @@ export default {
 			return new Map(this.chats.filter((c) => c.platformChatId).map((c) => [c.platformChatId, c]))
 		},
 
-		/*
-		 * ponytail: every matching call renders; there is no window. At the
-		 * 5000-row cap of ArchiveStore::calls() that is about 25 000 nodes. If a
-		 * large archive paints slowly, cap the rows with the limit plus
-		 * IntersectionObserver sentinel that App.vue uses for the chat list, and
-		 * make jumpDate() raise the limit past the target row.
-		 */
+		/** Every call that matches the filters, newest first. */
 		rows() {
 			const who = this.f.who.trim().toLowerCase()
 			const result = this.f.result.id
@@ -125,12 +129,20 @@ export default {
 					if (who && !this.peerName(c).toLowerCase().includes(who)) {
 						return false
 					}
-					if (result && c.result !== result) {
+					if (result && this.resultOf(c) !== result) {
 						return false
 					}
 					return !((direction === 'in' && c.fromMe) || (direction === 'out' && !c.fromMe))
 				})
 				.map((c) => ({ ...c, chat: (c.peer && this.peerChats.get(c.peer)) || null }))
+		},
+
+		/**
+		 * The rows in the page. A large archive has thousands of calls, and
+		 * a row is about five nodes, so the page holds a part of them.
+		 */
+		shown() {
+			return this.rows.slice(0, this.limit)
 		},
 
 		active() {
@@ -139,14 +151,51 @@ export default {
 
 		countLabel() {
 			return this.active
-				? t('chat_archive', '{n} of {total} calls', { n: this.rows.length, total: this.calls.length }, { escape: false, sanitize: false })
-				: t('chat_archive', '{n} calls', { n: this.calls.length }, { escape: false, sanitize: false })
+				? t('chat_archive', 'Calls: {n} of {total}', { n: this.rows.length, total: this.calls.length }, { escape: false, sanitize: false })
+				: t('chat_archive', 'Calls: {n}', { n: this.calls.length }, { escape: false, sanitize: false })
 		},
+	},
+
+	watch: {
+		// A new filter starts at the first page again.
+		f: {
+			deep: true,
+			handler() {
+				this.limit = PAGE
+			},
+		},
+	},
+
+	created() {
+		// Adds a page when the last rows come near the visible part.
+		this.observer = new IntersectionObserver((entries) => {
+			if (entries[0]?.isIntersecting) {
+				this.limit += PAGE
+			}
+		}, { rootMargin: '600px' })
+	},
+
+	beforeUnmount() {
+		this.observer.disconnect()
 	},
 
 	methods: {
 		t,
 		callLabel,
+
+		/**
+		 * Function ref of the row after the last call. Vue calls it with
+		 * the element on each render and with null when the row goes.
+		 *
+		 * @param {?HTMLElement} el the row, or null
+		 */
+		observeSentinel(el) {
+			this.observer.disconnect()
+			if (el) {
+				this.observer.observe(el)
+			}
+		},
+
 		dayKey,
 		fmtDateTime,
 		fmtRelDate,
@@ -171,6 +220,17 @@ export default {
 		},
 
 		/**
+		 * The filter value of a call. An outgoing call that nobody answered
+		 * has the value "no_answer", so the "Missed" filter does not show it.
+		 *
+		 * @param {object} c a call row
+		 * @return {string} the result id that the result filter compares
+		 */
+		resultOf(c) {
+			return c.result === 'missed' && c.fromMe ? 'no_answer' : c.result
+		},
+
+		/**
 		 * @param {object} c a call row
 		 * @return {object} the icon component for its direction and result
 		 */
@@ -189,20 +249,26 @@ export default {
 
 		/**
 		 * Scroll to the day band of the chosen date, or of the next older day
-		 * that has a call. The rows are newest first and all of them render, so
-		 * this needs no request.
+		 * that has a call. The rows are newest first and all of them are in
+		 * memory, so this needs no request. The page grows to hold the target.
 		 *
 		 * @param {string} value the date input value, "YYYY-MM-DD"
 		 */
-		jumpDate(value) {
+		async jumpDate(value) {
 			if (!value) {
 				return
 			}
 			const end = new Date(value + 'T23:59:59.999').getTime()
 			// Nothing that old: the oldest call is the nearest the archive has.
-			const target = this.rows.find((c) => c.startedAt <= end) ?? this.rows[this.rows.length - 1]
+			const found = this.rows.findIndex((c) => c.startedAt <= end)
+			const index = found === -1 ? this.rows.length - 1 : found
+			const target = this.rows[index]
 			if (!target) {
 				return
+			}
+			if (index >= this.limit) {
+				this.limit = index + PAGE
+				await this.$nextTick()
 			}
 			// The target is the newest visible call of its day, so its band is right above it.
 			const el = this.$refs.scroller.querySelector(`[data-day="${dayKey(target.startedAt)}"]`)
@@ -243,6 +309,10 @@ export default {
 	align-items: center;
 	color: var(--color-text-maxcontrast);
 }
+/* Firefox cuts the year off in a narrower date field. */
+.ca-calls__jump input {
+	min-width: 11em;
+}
 .ca-calls__filters {
 	display: flex;
 	flex-wrap: wrap;
@@ -270,6 +340,10 @@ export default {
 	flex: 1;
 	overflow-y: auto;
 	padding: 8px 16px;
+}
+/* An empty row: when it comes near the visible part, the next page loads. */
+.ca-calls__more {
+	height: 1px;
 }
 .ca-day {
 	position: sticky;
@@ -344,6 +418,6 @@ export default {
 }
 .ca-call--missed .ca-call__icon,
 .ca-call--missed .ca-call__label {
-	color: var(--color-error);
+	color: var(--color-error-text);
 }
 </style>

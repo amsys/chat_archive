@@ -11,10 +11,10 @@ use OCP\IDBConnection;
 /** @template-extends QBMapper<Source> */
 class SourceMapper extends QBMapper {
 	/**
-	 * last_error of a source whose previous import stopped before it finished.
-	 * arch: D29.1
+	 * The last_error code of a source whose previous import stopped before it
+	 * finished.
 	 */
-	public const CRASH_NOTE = 'the previous import stopped before it finished';
+	public const CRASH_NOTE = 'import_stopped';
 
 	public function __construct(IDBConnection $db) {
 		parent::__construct($db, 'chatarchive_source', Source::class);
@@ -57,9 +57,8 @@ class SourceMapper extends QBMapper {
 	 * Mark the source 'queued' for an ImportSourceJob. One UPDATE that only
 	 * changes an idle row (no state) or a state older than 6 h. Two callers
 	 * racing for the same source can both read "idle" first; only one of
-	 * them changes the row, and only that one adds the job (P4).
+	 * them changes the row, and only that one adds the job.
 	 * @return bool true when this call changed the row
-	 * arch: D29.1
 	 */
 	public function queue(Source $source): bool {
 		$now = time();
@@ -84,7 +83,6 @@ class SourceMapper extends QBMapper {
 	 * Clear a 'queued' state. A row that another worker holds as 'running'
 	 * stays as it is.
 	 * @return bool true when this call changed the row
-	 * arch: D29.1
 	 */
 	public function releaseQueued(Source $source): bool {
 		$q = $this->db->getQueryBuilder();
@@ -104,9 +102,8 @@ class SourceMapper extends QBMapper {
 	 * entity's own state is set to match what is now on disk.
 	 *
 	 * A claim over a stale 'running' state (as the entity shows it before
-	 * the UPDATE) also writes a note to last_error. A run that ends without
-	 * error clears it (P8).
-	 * arch: D29.1
+	 * the UPDATE) also writes a note to last_error. The next import that ends
+	 * without error clears it.
 	 */
 	public function claim(Source $source): bool {
 		$now = time();

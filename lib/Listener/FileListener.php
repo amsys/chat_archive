@@ -29,8 +29,6 @@ use Psr\Log\LoggerInterface;
  * the policy "restore" for every source of that user. The listener never
  * blocks the user's operation; a failure is logged and the operation goes on.
  *
- * arch: D29.2
- *
  * @template-implements IEventListener<BeforeNodeDeletedEvent|BeforeNodeRenamedEvent|NodeRenamedEvent>
  */
 class FileListener implements IEventListener {
@@ -76,7 +74,7 @@ class FileListener implements IEventListener {
 		foreach ($rows as $row) {
 			$uid = $row['user_id'];
 			$preserve[$uid] ??= $this->preserve->read($uid);
-			// arch: D20.2 (I20.8) the preserve switch overrides the source's policy
+			// The preserve switch overrides the source's policy (I20.8).
 			$policy = $preserve[$uid] ? Source::ON_DELETE_RESTORE : $row['on_delete'];
 			switch ($policy) {
 				case Source::ON_DELETE_UNLINK:
@@ -107,7 +105,7 @@ class FileListener implements IEventListener {
 		$userFolder = $this->root->getUserFolder($row['user_id']);
 		$sourcePath = $userFolder->getPath() . '/' . trim($row['folder'], '/');
 		$target = $sourcePath . '/' . $row['src_path'];
-		// arch: D29.2 (P7) a target under the deleted path would go away with it.
+		// A target under the deleted path would go away with it.
 		// This covers a delete of the source folder itself: the user means it.
 		if ($target === $deletedPath || str_starts_with($target, $deletedPath . '/')) {
 			return;
@@ -141,7 +139,7 @@ class FileListener implements IEventListener {
 		}
 	}
 
-	/** arch: D29.2 (P2) move the pointer when a file move changed the file id. */
+	/** Move the pointer when a file move changed the file id. */
 	private function onRename(Node $target): void {
 		$path = $target->getPath();
 		$oldId = $this->renaming[$path] ?? null;

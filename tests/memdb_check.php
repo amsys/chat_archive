@@ -2,9 +2,9 @@
 /**
  * Checks for MemDb, the in-memory page loader of the WhatsApp import.
  * Needs pdo_sqlite with the memdb VFS and sqlite_dbpage; tests/run.sh runs it in a container.
- * arch: D1.1, D1.2, D7.2, D7.4
  */
 declare(strict_types=1);
+require __DIR__ . '/../lib/Service/ImportException.php';
 require __DIR__ . '/../lib/Source/WhatsApp/MemDb.php';
 require __DIR__ . '/../lib/Source/WhatsApp/Crypt15.php';
 use OCA\ChatArchive\Source\WhatsApp\Crypt15;
@@ -126,7 +126,7 @@ $msg = throws(fn () => $mem->write($big));
 assert($msg === 'decrypted backup is 1025 MiB; the in-memory import supports up to 1024 MiB', "size cap message: $msg");
 $mem->abort();
 
-// finding 4: a forged header (N x ps = 900 MiB) with a small encryptedSize
+// a forged header (N x ps = 900 MiB) with a small encryptedSize
 // (1000 bytes, x 1032 = the zlib-ratio cap WhatsAppProvider::open() passes)
 // must throw on the header, before the loader connection is even opened.
 $loaderProp = new ReflectionProperty(MemDb::class, 'loader');
@@ -137,7 +137,7 @@ $forged = substr_replace($forged, pack('N', 14400), 28, 4); // 14400 x 64 KiB = 
 $memForged = new MemDb(1000 * 1032); // encryptedSize 1000
 $msgForged = throws(fn () => $memForged->write($forged));
 assert($msgForged === 'decrypted backup is 900 MiB; the encrypted source allows at most 1 MiB', "encrypted-size cap message: $msgForged");
-assert($loaderProp->getValue($memForged) === null, 'finding 4: the loader connection was never opened');
+assert($loaderProp->getValue($memForged) === null, 'the loader connection was never opened');
 $memForged->abort();
 
 // a header count that is not valid (bytes 24-27 differ from 92-95) is refused
@@ -160,7 +160,7 @@ foreach ([strlen($plain) - 100, strlen($plain) - 4096, 50] as $len) {
 $msg = throws(fn () => load($plain . str_repeat("\0", 4096), 4096));
 assert($msg !== null && str_contains($msg, 'more data than the header'), "extra page: $msg");
 
-// two MemDb objects loaded at the same time stay apart (I1.3)
+// two MemDb objects loaded at the same time stay apart
 $other = build(1024, 50, 'other');
 $a = new MemDb(GENEROUS);
 $b = new MemDb(GENEROUS);
@@ -179,7 +179,7 @@ $dbB = $b->finish();
 same($dbA, $plain, 'first MemDb keeps its own data');
 same($dbB, $other, 'second MemDb keeps its own data');
 
-// after abort() or after the reader is dropped, no connection keeps the memdb (I1.4)
+// after abort() or after the reader is dropped, no connection keeps the memdb
 $name = new ReflectionProperty(MemDb::class, 'name');
 $reopen = static fn (MemDb $m): PDO => new PDO('sqlite:file:' . $name->getValue($m) . '?vfs=memdb');
 $m = new MemDb(GENEROUS);
@@ -199,8 +199,8 @@ $m = new MemDb(GENEROUS);
 throws(fn () => $m->write($plain . str_repeat("\0", 4096)));
 assert(tables($reopen($m)) === [], 'a throw in write() frees the memdb');
 
-// A mid-load throw must leave no decrypted page and no key hex in the trace
-// (finding 1, I1.1): build a synthetic crypt15 stream, by hand, whose
+// A mid-load throw must leave no decrypted page and no key hex in the trace:
+// build a synthetic crypt15 stream, by hand, whose
 // plaintext overflows its own header page count, and run it through the
 // real Crypt15::decryptTo -> MemDb::write chain so every frame on the stack
 // at throw time carries a #[\SensitiveParameter] argument.
@@ -265,7 +265,7 @@ assert(!$argsHold($e->getTrace(), $key), 'the trace must not hold the binary bac
 // nothing about that frame's own #[\SensitiveParameter] on $plain. The real
 // way detectStream() throws is a wrong key or corrupt data: the first
 // decrypted chunk is then neither a zlib header nor "SQLite format 3", and
-// that chunk is exactly the decrypted bytes finding 1 must keep off disk.
+// that chunk is exactly the decrypted bytes that must stay off disk.
 // Encrypt bogus plaintext with the same key/iv/counter as above and run it
 // through the real decryptTo() -> decryptStream() -> detectStream() chain,
 // so the frame on the stack at throw time is the real call, not a

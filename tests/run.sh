@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Every check in one command: the two lints, the three php checks and the
-# integration test. Use it before a release and in CI.
+# Every check in one command: eslint, the translation check, phpstan, the
+# php checks and the integration test. Use it before a release.
 #
 #   ./tests/run.sh                  all checks
 #   SKIP_INTEGRATION=1 ./tests/run.sh   leave out the container test

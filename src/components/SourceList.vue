@@ -1,7 +1,6 @@
 <!--
   List of the user's sources on the personal settings page: state, status
   lines, the import or sync button and a menu per source.
-  arch: D27.1
 -->
 <template>
 	<div class="ca-list">
@@ -261,7 +260,7 @@ export default {
 		},
 
 		async turnOff(s) {
-			// arch: D34.4 (the empty string turns the live sync off)
+			// The empty string turns the live sync off.
 			const payload = { provider: s.provider, label: s.label, folder: s.folder, onDelete: s.onDelete, syncSession: '' }
 			if (await this.call(s, () => api.updateSource(s.id, payload))) {
 				this.$emit('changed')

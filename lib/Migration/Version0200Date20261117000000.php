@@ -14,7 +14,6 @@ use OCP\Migration\SimpleMigrationStep;
 
 /**
  * Add the live sync columns: source mode and sync state, the in_backup flags and the media fetch counter.
- * arch: D21.1
  */
 class Version0200Date20261117000000 extends SimpleMigrationStep {
 	public function __construct(private IDBConnection $db) {

@@ -10,10 +10,6 @@ vue = "clean"
 shell = "clean"
 php = "off"
 
-[refs]
-declared = [".state/runs/settings-waha/03-design.md"]   # the design that declares the D2x and D3x ids
-id_forms = ["D<n>.<m>"]
-
 [layout]
 front_matter = false         # the five doc files keep fixed paths and no front matter
 index = false                # the root README is the index; there is no docs/README.md

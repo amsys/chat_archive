@@ -4,11 +4,11 @@ Install: see the [README](../README.md).
 
 ## Setup
 
-The setup has three parts: the key in WhatsApp, the upload from the phone,
-and the source in Nextcloud. The dialog **Add a source** in Nextcloud under
-Settings → Personal → Chat Archive follows the same steps. Parts 1 and 2 are
-the phone instructions. Skip them for a live-only source (see *Live sync
-(WAHA)*).
+The setup has three parts: the 64-digit backup key in WhatsApp, the upload
+from the phone, and the source in Nextcloud. The dialog **Add a source** in
+Nextcloud under Settings → Personal → Chat Archive follows the same steps.
+Parts 1 and 2 are the phone instructions. Skip them for a live-only source
+(see *Live sync (WAHA)*).
 
 ### 1. Turn on the encrypted backup with a key (WhatsApp)
 
@@ -52,8 +52,8 @@ three steps. Use **Back** and **Next** to move.
 1. **Mode.** Choose **Phone backup**. The second choice, **Live sync only**,
    appears only when the administrator allows live sync for you.
 2. **Phone instructions and key.** The dialog repeats parts 1 and 2 above.
-   Enter the 64-digit key and choose the parent folder from part 2
-   (`/WhatsApp`) with **Choose…**.
+   Enter the backup key in the field **Backup key (64 characters)** and
+   choose the parent folder from part 2 (`/WhatsApp`) with **Choose…**.
 3. **Check.** The dialog looks for the backup file in the folder. It shows
    the file name, its size and the date it was written, or says that no
    backup is there yet. You can add the source in both cases: the import
@@ -66,9 +66,9 @@ A large backup takes a few minutes. Open **Chat Archive** from the app menu.
 For WhatsApp Business repeat the steps with the `com.whatsapp.w4b` folder and
 a second source.
 
-To change a source, open its menu and choose **Edit**. Leave the key empty
-to keep the stored key. **Remove** deletes the chats and messages of the
-source from the archive. The files stay in your folders.
+To change a source, open its menu and choose **Edit**. Leave the backup key
+field empty to keep the stored key. **Remove** deletes the chats and
+messages of the source from the archive. The files stay in your folders.
 
 ## Import
 
@@ -105,21 +105,23 @@ backups adds one version to the edit history. Thus, if you change between an
 older and a newer backup many times, the history of an edited message gets a
 new version at each change.
 
-WhatsApp writes the full backup `msgstore.db.crypt15` approximately one time
-each week. On the other days it writes only small increment files
-(`msgstore-increment-N.db.crypt15`). The import reads only the full backup and
-ignores the increment files. Thus the archive can be up to 7 days older than
-the phone. Messages that arrive after the last full backup come into the
-archive with the next full backup. They do not get a deleted mark.
+WhatsApp writes the full backup `msgstore.db.crypt15` every night. The import
+reads only this file. When the folder also holds increment files
+(`msgstore-increment-N.db.crypt15`), the import ignores them. Thus the archive
+can be up to one day older than the phone. Messages that arrive after the
+last full backup come into the archive with the next full backup. They do
+not get a deleted mark.
 
-The source shows **Last import** and, after a failed run, **Last error**.
+The source shows the time of the last import and, after a failed run,
+**Import failed:** with the error.
 
 A live sync adds new messages between two backups; it never marks a message
 or a chat as deleted, revoked, edited or archived. Only a backup import sets
 those marks. A message that the live sync stored and the backup does not hold
 yet gets no deleted mark.
 
-A decrypted backup above 1 GiB fails the import; see *Troubleshooting*.
+A backup that is too large fails the import; see
+[Troubleshooting](#troubleshooting).
 
 After an app upgrade that adds a new flag to already-imported media, run
 `occ chat_archive:import --force` once so the archive re-reads that flag
@@ -131,6 +133,11 @@ from the backup you already imported.
 three-dots menu above the list holds **Sort**: *Most recent first* or *By
 name*. With more than one source the same menu picks the source.
 
+Each chat shows the time of its last message. A message of today shows
+the clock time. Older messages show "Yesterday", the weekday in the last
+week, or the date. The list reloads every minute while the tab shows, and
+when you come back to the tab, so a chat with new messages moves up.
+
 ### Deleted and archived chats and messages
 
 The list options menu (⋯ above the chat list) has a **Show** section with two
@@ -138,11 +145,11 @@ checkboxes. Both are on by default:
 
 | Checkbox | When on | When off |
 |---|---|---|
-| Deleted | Deleted messages and chats show with a trash chip. | They are left out of the message page and out of the in-app search. |
+| Deleted | Deleted messages and chats show with a trash chip. | Deleted messages are left out of the message page and out of the in-app search. Deleted chats are left out of the chat list. |
 | Archived on the phone | Archived chats show with an archive chip. | They are left out of the chat list. |
 
-Both checkboxes change only the message page and the in-app search box above
-the chat list. They do not change the Nextcloud unified search (the
+Both checkboxes change only the chat list, the message page and the in-app
+search box above the chat list. They do not change the Nextcloud unified search (the
 magnifying glass in the top bar) or full text search: those always include
 every message.
 
@@ -150,7 +157,8 @@ every message.
 
 A deleted message shows a trash chip with text "Deleted". A message you edited
 in WhatsApp shows an "Edited" chip. Both chips appear below the message text
-and the time.
+and the time. Photos, videos and files get the same chips. The text and the
+file of a deleted message show dimmed.
 
 The edited chip is a button. Click it or press Enter to see the edit history.
 The history shows each version in order, with the label "Seen in backup of
@@ -165,25 +173,37 @@ keys do nothing while you type in a field.
 
 **Contact names** come from your Nextcloud address books, so a number shows
 as a name. The name is cached per chat. **Refresh contact names** clears
-that cache after you edit a contact.
+that cache after you edit a contact. A number that is in no address book
+shows with the name that WhatsApp holds for it, when the source has live
+sync. If not, the number shows.
 
 **Media** opens from the message. A file that WhatsApp itself flagged as
 suspicious shows a warning instead of a preview: the app never opens it and
 never restores a deleted copy of it on its own. Only a **Download** button
 is offered, and it asks you to confirm before it starts.
 
+A file can show the chip "WhatsApp recorded a different file type". WhatsApp
+recorded one type of file for the message, and Nextcloud sees a different
+type for the file, for example a photo in WhatsApp and a program in
+Nextcloud. Point at the chip to see the two types. Only the main type counts
+(image, video, audio, application and so on). When Nextcloud cannot tell
+the type of the file, no chip shows. The file can be a different kind of
+file than the message shows. Open it only if you trust the sender.
+
 A left click on any other file runs the action you choose in
 Settings → Personal → Chat Archive:
 
 | Action | What happens |
 |---|---|
-| View (default) | The Nextcloud viewer opens the file. A file the viewer does not know is downloaded. |
-| Open locally | The path goes to the Nextcloud desktop client on that machine. |
-| Custom | Your own URL, with `{path}` replaced by the path of the file. For a WebDAV mount or your own URL handler. |
+| Open in Nextcloud (default) | The Nextcloud viewer opens the file. A file the viewer does not know is downloaded. |
+| Open the local copy with the Nextcloud desktop client | The path goes to the Nextcloud desktop client on that machine. |
+| Open with a URL template | Your own URL, with `{path}` replaced by the path of the file. For a WebDAV mount or your own URL handler. |
 
 In a chat, the menu on each file offers **Show in Files**, **Download** and
-**Open locally**. A search result shows a still preview and the file name
-only. Open the result to get the file and its menu in the chat.
+**Open locally**. A search result of a file shows a still preview and the
+caption, with the search terms marked. When the file has no caption, the
+result shows the file name. Open the result to get the file and its menu
+in the chat.
 
 ## Search
 
@@ -204,6 +224,9 @@ is a valid search. Results come 50 at a time, newest first.
 Click a result to open its chat at that message. The arrow **Back to
 results** above the chat brings the result list back.
 
+The Nextcloud search (the magnifying glass in the top bar) also finds
+messages. Click a result there to open Chat Archive at that message.
+
 ### Full text search (optional)
 
 Settings → Administration → Chat Archive has a switch for the Nextcloud
@@ -218,15 +241,18 @@ the plain scan and shows no error.
 
 ## Calls
 
-**Calls** above the chat list opens the call log of the source. Each row
+**Calls** above the chat list opens the calls of the source. Each row
 shows the contact, the direction, the result and the time. A missed incoming
 call is marked in red. Day bands separate the days.
 
 | Filter | Values |
 |---|---|
 | Contact | part of a name or a number |
-| Result | any, missed, connected, declined, failed |
+| Result | any, missed, no answer, connected, declined, failed |
 | Direction | any, incoming, outgoing |
+
+*Missed* is an incoming call that you did not answer. *No answer* is an
+outgoing call that the other person did not answer.
 
 The count above the list says how many calls match. **Clear filters**
 removes all three.
@@ -297,7 +323,8 @@ was tested with WAHA 2026.10.1, engine GOWS, the free tier.
    scan the QR code of the dashboard. The QR code is valid for about two
    minutes. After that time, start the session again.
 7. In Nextcloud, enter the server URL `http://127.0.0.1:3000` and the API
-   key in the section **Live sync (WAHA)**. Choose **Test connection**. The
+   key in the section **Live sync (WAHA)**, turn on **Allow live sync
+   through WAHA** and choose **Save**. Then choose **Test connection**. The
    session `default` must show the status `WORKING`.
 
 Link the phone one time and keep the link. WhatsApp sends the chat history
@@ -312,12 +339,14 @@ status error. The next sync removes the error.
 Settings → Administration → Chat Archive, section **Live sync (WAHA)**:
 
 - **Allow live sync through WAHA**: the switch for the whole server.
-- **Server URL** and **API key**. The key is stored encrypted and is never
-  shown again; leave the field empty to keep it.
-- **Media files per sync run**: 0 to 200. With 0 the sync loads no media.
+- **Server URL** and **API key**. The app stores the key encrypted (see
+  [Security boundaries](DEVELOPER-GUIDE.md#security-boundaries)) and never
+  shows it again; leave the field empty to keep it.
+- **Media files per sync run**: 0 to 200. The default is 0: the sync loads
+  no media.
 - **Realtime updates for an open chat**: off by default. When it is on, a
-  chat that is open in the app asks the WAHA server for its new messages
-  every 8 seconds. See [Realtime updates](#realtime-updates).
+  chat that is open in the app asks the WAHA server for its new messages.
+  See [Realtime updates](#realtime-updates).
 - **Test connection**: shows the WAHA version, engine and tier, or an error.
   The test uses the saved URL and key. It also lists the sessions.
 - **Sessions**: enter a Nextcloud user ID for each session. One session
@@ -339,9 +368,10 @@ Two ways exist:
 - **Phone backup plus live sync.** Import a backup first. Then choose
   **Turn on live sync…** in the menu of the source, choose a session and
   tick **I understand the risk for my WhatsApp number.**
-- **Live sync only.** In the dialog, step 1, choose **Live sync only, no
-  backup file**. Read the warning, choose a session and tick the box. Step 2
-  asks for a name and a folder only. Choose **Add and sync**.
+- **Live sync only.** In the dialog, step 1, choose **Live sync only**. Read
+  the warning, choose a session and tick the box. Step 2 asks for a name and
+  a folder only. Choose **Next**. Step 3 shows the delete policy. Choose
+  **Add and sync**.
 
 The first sync starts with the next background job. It loads the chat
 history. A sync runs every 15 minutes and stops after about 40 seconds. The
@@ -389,10 +419,12 @@ The source shows **Live sync failed** with one of these messages.
 | The WAHA server does not answer | Try again later. Tell the administrator if it stays. |
 | The WAHA server does not accept the API key | The administrator enters the correct key. |
 | The WAHA server does not know this session | The administrator checks the session name. |
-| The WhatsApp session on the WAHA server is not running | The administrator links the phone again in WAHA. |
+| The WhatsApp session on the WAHA server is not ready | The administrator links the phone again in WAHA. |
 | This session now belongs to a different WhatsApp number | The sync stopped so that no foreign chats enter your archive. The administrator links the session to your number again. |
 | The WAHA server sent an answer that the archive cannot read | Tell the administrator. A WAHA update can cause this. |
 | Nextcloud blocked the connection to the WAHA server | The administrator allows local addresses in the server configuration. |
+| The WAHA session does not report its WhatsApp account. The sync continues when it does. | Wait for the next sync. If the message stays, the administrator checks the session in WAHA. |
+| The sync stopped with an internal error. The Nextcloud log has the details. | Tell the administrator. |
 | The folder of this source does not exist | Edit the source and choose a folder. |
 
 While you add or change a source, the dialog can also say that another
@@ -437,23 +469,33 @@ for the cases it does not cover).
 
 ## Troubleshooting
 
-**"No backup file found in …"** — the phone did not upload
-`msgstore.db.crypt15` yet, or the folder of the source is not the parent of
-`Databases`. Check step 2 of the setup.
+**"The folder has no backup file. The file name is msgstore.db.crypt15."** —
+the phone did not upload `msgstore.db.crypt15` yet, or the folder of the
+source is not the parent of `Databases`. Check step 2 of the setup.
 
-**"No backup key set for this source"** — open the source and paste the
-64-digit key.
+**"This source has no backup key. Enter the key in the settings of the
+source."** — open the menu of the source, choose **Edit** and paste the
+backup key.
 
-**"Wrong key?"** — the key does not match this backup. WhatsApp writes a new
-key when you turn the encrypted backup off and on again. No rows change on a
-failed import.
+**"The backup key does not open this backup. Check the key."** — the key does
+not match this backup. WhatsApp writes a new key when you turn the encrypted
+backup off and on again. No rows change on a failed import.
 
-**A corrupt backup** fails with a message from zlib or from the checksum. No
-rows change. Wait for the next nightly backup from the phone.
+**"The backup file is damaged or not complete. Wait for the next backup from
+the phone."** — the checksum or the decompression of the backup failed, for
+example because the upload did not finish. No rows change. Wait for the next
+nightly backup from the phone.
 
-**"decrypted backup is … MiB; the in-memory import supports up to 1024 MiB"**
-— the backup decrypts to more than 1 GiB. The app reads it in memory only
-and does not fall back to disk, so the import stops with no rows changed.
+**"The backup is too large for the import."** — the decrypted backup is above
+one of two limits:
+
+- 1024 MiB (1 GiB). The app reads the backup in memory only and does not
+  fall back to disk.
+- 1032 times the size of the encrypted file. No real backup decompresses to
+  more than this, so a backup above this limit is damaged. The limit stops a
+  small file from using a large amount of memory.
+
+In both cases the import stops with no rows changed.
 
 **A message shows "not in Nextcloud"** — the media file is not in the source
 folder. The phone may never have downloaded it: WhatsApp keeps such a file

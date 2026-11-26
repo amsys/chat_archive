@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace OCA\ChatArchive\Cron;
 
 use OCA\ChatArchive\Db\SourceMapper;
-use OCA\ChatArchive\Service\ImportRunningException;
+use OCA\ChatArchive\Service\SourceBusyException;
 use OCA\ChatArchive\Service\SyncService;
 use OCA\ChatArchive\Waha\WahaConfig;
 use OCP\AppFramework\Utility\ITimeFactory;
@@ -21,7 +21,8 @@ class SyncJob extends TimedJob {
 		private WahaConfig $config,
 	) {
 		parent::__construct($time);
-		// arch: D25.2
+		// Every 15 minutes. A time-sensitive job runs at any hour, not only in
+		// the maintenance window.
 		$this->setInterval(900);
 		$this->setTimeSensitivity(IJob::TIME_SENSITIVE);
 	}
@@ -37,7 +38,7 @@ class SyncJob extends TimedJob {
 			}
 			try {
 				$this->sync->run($source);
-			} catch (ImportRunningException) {
+			} catch (SourceBusyException) {
 				// lost the claim to another worker; that one owns the source row
 			}
 		}

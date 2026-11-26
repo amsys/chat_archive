@@ -12,9 +12,7 @@ use OCP\Config\IUserConfig;
  * archive rows on request and always copies a deleted linked file back:
  * the delete policy of every source of the user acts as "restore".
  * The switch defaults ON, so a user with no stored value is protected.
- *
- * arch: D29.3
- * arch: D20.2 (I20.8)
+ * This is invariant I20.8 of docs/DEVELOPER-GUIDE.md.
  */
 class Preserve {
 	private const KEY = 'preserve';
