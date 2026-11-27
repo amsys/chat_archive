@@ -9,6 +9,8 @@ use OCA\ChatArchive\Db\ArchiveStore;
 use OCA\ChatArchive\Db\SourceMapper;
 use OCA\ChatArchive\Service\ContactNames;
 use OCA\ChatArchive\Service\DisplayText;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
 use OCP\IDateTimeFormatter;
 use OCP\IL10N;
 use OCP\IURLGenerator;
@@ -26,6 +28,11 @@ use OCP\Search\SearchResultEntry;
  *
  * This provider uses the SQL scan only (ArchiveStore::search()), not the
  * full text search path.
+ *
+ * Each entry carries attributes for agents: messageId, chatId, sourceId and
+ * kind always; path, fileId and mime when the media file of the hit is in
+ * the user's files. path is relative to the user's root folder, so a file
+ * tool can open it.
  */
 class MessageSearchProvider implements IFilteringProvider {
 	public function __construct(
@@ -35,6 +42,7 @@ class MessageSearchProvider implements IFilteringProvider {
 		private IL10N $l,
 		private IURLGenerator $url,
 		private IDateTimeFormatter $dates,
+		private IRootFolder $root,
 	) {
 	}
 
@@ -101,7 +109,13 @@ class MessageSearchProvider implements IFilteringProvider {
 		$more = count($hits) > $limit;
 		$hits = array_slice($hits, 0, $limit);
 		$chats = $this->store->chatsByIds(array_unique(array_column($hits, 'chatId')));
-		$entries = array_map(fn (array $hit) => $this->toEntry($hit, $chats[$hit['chatId']]), $hits);
+		$media = $this->store->mediaForMessages(array_column($hits, 'id'));
+		$userFolder = $media === [] ? null : $this->root->getUserFolder($user->getUID());
+		$entries = array_map(function (array $hit) use ($chats, $media, $userFolder): SearchResultEntry {
+			$entry = $this->toEntry($hit, $chats[$hit['chatId']]);
+			$this->addMediaAttributes($entry, $media[$hit['id']] ?? null, $userFolder);
+			return $entry;
+		}, $hits);
 		return $more
 			? SearchResult::paginated($name, $entries, $offset + count($entries))
 			: SearchResult::complete($name, $entries);
@@ -115,7 +129,7 @@ class MessageSearchProvider implements IFilteringProvider {
 		$time = $this->dates->formatDateTime(intdiv((int)$hit['sentAt'], 1000));
 		$body = trim((string)($hit['body'] ?? ''));
 		$text = $body !== '' ? mb_substr($body, 0, 200, 'UTF-8') : (string)$hit['kind'];
-		return new SearchResultEntry(
+		$entry = new SearchResultEntry(
 			'',
 			$this->chatName($chat),
 			$time . ': ' . $text,
@@ -128,6 +142,35 @@ class MessageSearchProvider implements IFilteringProvider {
 			]),
 			'icon-comment',
 		);
+		$entry->addAttribute('messageId', (string)$hit['id']);
+		$entry->addAttribute('chatId', (string)$hit['chatId']);
+		$entry->addAttribute('sourceId', (string)$hit['sourceId']);
+		$entry->addAttribute('kind', (string)$hit['kind']);
+		return $entry;
+	}
+
+	/**
+	 * Add path, fileId and mime of the media file when it is in the user's
+	 * files. The same lookup as ApiController::attachMedia(): keep the two in step.
+	 * The file id comes from a media row of the user's own source, and the
+	 * lookup runs in the user's own folder, so no path of another user shows.
+	 * @param array<string, mixed>|null $md an ArchiveStore::mediaForMessages() row
+	 */
+	private function addMediaAttributes(SearchResultEntry $entry, ?array $md, ?Folder $userFolder): void {
+		if ($md === null || $md['fileId'] === null || $userFolder === null) {
+			return;
+		}
+		$node = $userFolder->getFirstNodeById($md['fileId']);
+		if ($node === null) {
+			return;
+		}
+		$path = $userFolder->getRelativePath($node->getPath());
+		if ($path === null) {
+			return;
+		}
+		$entry->addAttribute('path', $path);
+		$entry->addAttribute('fileId', (string)$md['fileId']);
+		$entry->addAttribute('mime', $node->getMimetype());
 	}
 
 	/**

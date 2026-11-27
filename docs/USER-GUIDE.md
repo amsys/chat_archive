@@ -239,6 +239,82 @@ media file, and indexes a media message with no text. After an upgrade from
 When the index is empty or the platform is down, the search falls back to
 the plain scan and shows no error.
 
+## MCP support (AI agents)
+
+An AI agent can search your archive through MCP (Model Context Protocol).
+You ask "what did we agree about the invoice in March?", and the agent
+finds the messages in Nextcloud. Nothing is exported.
+
+The app registers a Nextcloud search provider. The **Context Agent** app
+serves every search provider as an MCP tool. For Chat Archive, the tool is
+`search_chat_archive_messages`.
+
+### Recommended setup: Context Agent
+
+Tested with Context Agent 2.11.0 on Nextcloud 35.
+
+1. The administrator installs AppAPI with a deploy daemon, then the
+   [Context Agent](https://apps.nextcloud.com/apps/context_agent) app.
+2. You make an app password: Settings → Security → **Create new app
+   password**. The agent reads only the archive of this user.
+3. You add the MCP server to the agent. The URL depends on the deploy
+   daemon:
+   - HaRP: `https://<your-nextcloud>/exapps/context_agent/mcp`
+   - The older Docker socket proxy:
+     `https://<your-nextcloud>/index.php/apps/app_api/proxy/context_agent/mcp/`
+
+   Send the app password as `Authorization: Bearer <app password>`.
+
+Example for Claude Code (`~/.claude.json`):
+
+```json
+"mcpServers": {
+  "chat-archive": {
+    "type": "http",
+    "url": "https://cloud.example.com/exapps/context_agent/mcp",
+    "headersHelper": "/home/you/.local/bin/chat-archive-mcp-headers"
+  }
+}
+```
+
+The `headersHelper` is a small script that prints
+`{"Authorization": "Bearer <app password>"}`. It reads the password from
+a file with mode 0600, so the password is not in the configuration file.
+
+### What the agent can do
+
+The tool takes the filters of the app search:
+
+| Filter | Value |
+|---|---|
+| `term` | Search text. Optional when a filter is set. |
+| `since`, `until` | Date and time, for example `2026-03-01T00:00:00Z`. |
+| `chat`, `source` | A chat id or a source id. |
+| `kind` | `text`, `image`, `video`, `audio`, `document`, `call`, `media` (any file) or `link`. |
+| `who` | `me` or `others`. |
+
+Each result gives the chat name, the time, the text and a link that opens
+the chat at that message. It also gives attributes: `messageId`, `chatId`,
+`sourceId` and `kind`. A photo, video, voice note or document that is in
+your files also gives `path`, `fileId` and `mime`. The agent can open the
+file with a Context Agent file tool, for example `get_file_content` with
+the `path`.
+
+Examples of requests:
+
+- "Find the photos that Anna sent last week."
+- "What did the group say about the boat in March 2025?"
+- "List the documents I sent to the supplier this year."
+
+### Before you start
+
+- The agent reads the messages that it finds and sends them to its AI
+  model. Use a model provider that you trust with your chats.
+- Revoke the app password in Settings → Security to stop the access.
+- Other MCP servers: nc_mcp_server also sends the filters. MCP Connector
+  sends only the search text, so the agent cannot filter. The
+  [roadmap](roadmap.md#ai-agent-access) has the details.
+
 ## Calls
 
 **Calls** above the chat list opens the calls of the source. Each row
@@ -394,6 +470,7 @@ after about 8 seconds. These rules apply:
 - The page asks only while its browser tab is visible and while it shows the
   newest messages of the chat.
 - The update loads message text only. Media files come with the sync.
+  Until then the message shows a spinner and "arrives with the next sync".
 - The requests go to the WAHA server, not to WhatsApp. WAHA answers from its
   own store.
 - A source with a backup only gets no realtime updates.
@@ -496,6 +573,12 @@ one of two limits:
   small file from using a large amount of memory.
 
 In both cases the import stops with no rows changed.
+
+**A message shows "arrives with the next sync"** — the live sync stored the
+message, and a later sync fetches its file. This also applies with realtime
+updates off. An open chat asks for the file again every 30 seconds and shows
+it when it is there. After 3 failed fetches the message shows "not in
+Nextcloud".
 
 **A message shows "not in Nextcloud"** — the media file is not in the source
 folder. The phone may never have downloaded it: WhatsApp keeps such a file

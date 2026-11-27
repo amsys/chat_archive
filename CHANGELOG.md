@@ -11,6 +11,23 @@ are the date of the release that contains them.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-27
+
+### Added
+
+- A result of the Nextcloud unified search now carries attributes for AI
+  agents: the message, chat and source ids and the message kind. A photo,
+  video, voice note or file whose file is in the user's files also carries
+  its path, file id and MIME type. The path is relative to the user's root
+  folder, so an agent on the Context Agent MCP server can open the file
+  with a file tool.
+- A photo, video or file that the live sync stored, but not fetched yet,
+  shows a spinner and "arrives with the next sync" instead of "not in
+  Nextcloud". An open chat asks for the file again every 30 seconds and
+  shows it when it is there, also with realtime updates off.
+- The README, the app store text and the user guide describe MCP support:
+  how an AI agent searches the archive through the Context Agent MCP server.
+
 ## [0.2.1] - 2026-11-26
 
 ### Fixed

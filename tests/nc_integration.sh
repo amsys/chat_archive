@@ -315,6 +315,19 @@ assert sorted(q) == ['at', 'chat', 'msg', 'source'] and all(v.isdigit() for v in
 assert q['source'] == '$SID' and q['at'] == '1725000180000', q   # K4, the invoice document
 " || fail "unified search entry does not link to its message"
 
+# A media hit carries the path of its file, relative to the user's root, so an agent file tool can open it
+curl -sf "${AUTH[@]}" "${OCS[@]}" "$BASE/ocs/v2.php/search/providers/chat_archive_messages/search?format=json" -G -d kind=image | python3 -c "
+import json,sys
+e = json.load(sys.stdin)['ocs']['data']['entries']
+a = {x['attributes'].get('path'): x['attributes'] for x in e}
+assert len(e) == 2 and len(a) == 2, e
+img = a.get('/WhatsApp/Media/WhatsApp Images/IMG-20240830-WA0001.jpg')
+assert img and img['fileId'].isdigit() and img['mime'] == 'image/jpeg' and img['kind'] == 'image', e
+# the group image whose backup path left the folder has no file, so no path, file id or mime
+assert set(a[None]) == {'messageId', 'chatId', 'sourceId', 'kind'}, e
+assert all(x['attributes']['messageId'].isdigit() and x['attributes']['sourceId'] == '$SID' for x in e), e
+" || fail "unified search media hit has no path"
+
 # usearch term=invoice should return 1
 [ "$(usearch -d term=invoice)" = "1" ] || fail "usearch invoice: $(usearch -d term=invoice)"
 
@@ -692,6 +705,37 @@ import json,sys
 c = {x['platformChatId']: x for x in json.load(sys.stdin)['ocs']['data']}
 assert c['23000001@s.whatsapp.net']['name'] == 'Anna from WhatsApp', c['23000001@s.whatsapp.net']['name']
 " || fail "a backup import put the number back in place of the name from WAHA"
+
+echo "a synced photo with no file yet shows as pending while a media pass can fetch it..."
+# WAHA0001 is a synced message (in_backup false). Give it a media row with no file, as a sync with a media limit stores it.
+$CTR exec $NAME php -r "
+\$pdo = new PDO('sqlite:/var/www/html/data/nc.db');
+\$id = \$pdo->query(\"SELECT id FROM ${PREFIX}chatarchive_message WHERE chat_id = $CID AND platform_msg_id = 'WAHA0001'\")->fetchColumn();
+\$pdo->prepare('INSERT INTO ${PREFIX}chatarchive_media (source_id, message_id, mime, file_name, sync_tries) VALUES (?, ?, ?, ?, 0)')->execute([$SID, \$id, 'image/jpeg', 'waha.jpg']);
+\$pdo->prepare('UPDATE ${PREFIX}chatarchive_message SET kind = ? WHERE id = ?')->execute(['image', \$id]);
+"
+# Prints the pending flag of the WAHA0001 photo and of every backup media row on the newest page
+pending() { api "/api/chats/$CID/messages" | python3 -c "
+import json,sys
+m = [x for x in json.load(sys.stdin)['ocs']['data']['messages'] if x.get('media')]
+w = [x['media']['pending'] for x in m if x['media']['fileName'] == 'waha.jpg']
+print(w, sorted(set(x['media']['pending'] for x in m if x['media']['fileName'] != 'waha.jpg')))"; }
+[ "$(pending)" = "[False] [False]" ] || fail "pending with a media limit of 0: $(pending)"
+api /admin/waha -X PUT -H 'Content-Type: application/json' -d '{"enabled":true,"url":"http://127.0.0.1:3999","mediaPerRun":5}' >/dev/null
+[ "$(pending)" = "[True] [False]" ] || fail "pending with a media limit of 5: $(pending)"
+# The media pass takes the same row (ArchiveStore::syncPendingSql). The fake WAHA has no such message, so the fetch fails once.
+OUT=$(occ chat_archive:sync) || fail "chat_archive:sync with a media limit failed: $OUT"
+[ "$OUT" = "{\"source\":$SID,\"chats\":0,\"messages\":0,\"media\":0}" ] || fail "unexpected sync stats with a pending file: $OUT"
+[ "$($CTR exec $NAME php -r "echo (new PDO('sqlite:/var/www/html/data/nc.db'))->query(\"SELECT sync_tries FROM ${PREFIX}chatarchive_media WHERE file_name = 'waha.jpg'\")->fetchColumn();")" = 1 ] \
+  || fail "the media pass did not try the pending file"
+[ "$(pending)" = "[True] [False]" ] || fail "pending after one failed fetch: $(pending)"
+# After SYNC_TRIES failed fetches the media pass gives the file up, so the page shows it as missing
+$CTR exec $NAME php -r "
+\$pdo = new PDO('sqlite:/var/www/html/data/nc.db');
+\$pdo->exec(\"UPDATE ${PREFIX}chatarchive_media SET sync_tries = 3 WHERE file_name = 'waha.jpg'\");
+"
+[ "$(pending)" = "[False] [False]" ] || fail "pending after 3 failed fetches: $(pending)"
+api /admin/waha -X PUT -H 'Content-Type: application/json' -d '{"enabled":true,"url":"http://127.0.0.1:3999","mediaPerRun":0}' >/dev/null
 
 echo "removing the source cascades..."
 api /settings/fulltextsearch -X PUT -d enabled=true >/dev/null

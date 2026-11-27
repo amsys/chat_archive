@@ -20,6 +20,7 @@ WhatsApp writes an end-to-end encrypted backup on your phone. The Nextcloud mobi
 - **Files you can move**: the archive points at each file by its Nextcloud file id. Move or rename a file anywhere in your storage, and the chat still opens it.
 - **A record of what changed**: a message that was deleted or edited on the phone stays in the archive, with a mark.
 - **Nextcloud search**: the search box of Nextcloud finds your messages too. The Full text search app is optional and gives ranked results.
+- **MCP support for AI agents**: through the Context Agent MCP server, an AI agent such as Claude Code can search your chats with the same filters and open the photos and documents of a result. Ask "what did we agree about the invoice in March?" and the agent finds the messages on your server.
 - **WhatsApp and WhatsApp Business** side by side, each as its own source.
 
 **What it is not**
@@ -31,7 +32,7 @@ Chat Archive is not a WhatsApp client. It does not send messages. An administrat
 A working Nextcloud background job (cron). On the phone: WhatsApp with end-to-end encrypted backup and a 64-digit key, and the Nextcloud mobile app with auto upload.
 
 The [user guide](https://github.com/amsys/chat_archive/blob/main/docs/USER-GUIDE.md) gives each step. This is a beta release.]]></description>
-    <version>0.2.1</version>
+    <version>0.2.2</version>
     <licence>AGPL-3.0-or-later</licence>
     <author>Martin</author>
     <namespace>ChatArchive</namespace>

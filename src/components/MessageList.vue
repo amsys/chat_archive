@@ -78,6 +78,8 @@ const GROUP_GAP_MS = 5 * 60 * 1000
 const HIGHLIGHT_MS = 2000
 /** An open chat of a live source asks for new messages at this interval. */
 const LIVE_MS = 8000
+/** A chat that shows a file the live sync has not fetched yet asks for it again at this interval. */
+const PENDING_MS = 30000
 
 export default {
 	name: 'MessageList',
@@ -140,6 +142,7 @@ export default {
 		if (this.live) {
 			this.liveTimer = setTimeout(this.liveTick, LIVE_MS)
 		}
+		this.pendingTimer = setInterval(this.pendingTick, PENDING_MS)
 	},
 
 	beforeUnmount() {
@@ -148,6 +151,7 @@ export default {
 		clearTimeout(this.highlightTimer)
 		clearTimeout(this.liveTimer)
 		this.liveTimer = null
+		clearInterval(this.pendingTimer)
 		this.resizeObserver.disconnect()
 	},
 
@@ -292,6 +296,33 @@ export default {
 			}
 			if (again && this.liveTimer !== null) {
 				this.liveTimer = setTimeout(this.liveTick, LIVE_MS)
+			}
+		},
+
+		/**
+		 * Ask again for the files that the live sync has not fetched yet. A
+		 * media pass of the timed sync or of a realtime update can fetch them
+		 * at any time. The step loads the page that starts at the oldest
+		 * pending message and takes only the media of the rows shown. A hidden
+		 * tab and a chat with no pending file ask nothing. A failed request
+		 * does not end the cycle.
+		 */
+		async pendingTick() {
+			const first = this.messages.find((m) => m.media?.pending)
+			if (!first || document.hidden || this.loading) {
+				return
+			}
+			try {
+				// afterId is exclusive, so id - 1 includes the pending message itself
+				const r = await api.messages(this.chat.id, { afterAt: first.sentAt, afterId: first.id - 1 })
+				const media = new Map((r.messages ?? []).map((m) => [m.id, m.media]))
+				for (const m of this.messages) {
+					if (m.media?.pending && media.has(m.id)) {
+						m.media = media.get(m.id)
+					}
+				}
+			} catch {
+				// the next step asks again
 			}
 		},
 

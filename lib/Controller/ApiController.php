@@ -285,6 +285,9 @@ class ApiController extends OCSController {
 			if ($md === null) {
 				continue;
 			}
+			// pending: no file yet, but a later media pass of the live sync can still fetch it
+			$md['pending'] = $this->waha->willFetch($md['syncPending']);
+			unset($md['syncPending']);
 			$md['path'] = null;
 			$md['exists'] = false;
 			$md['hasPreview'] = false;

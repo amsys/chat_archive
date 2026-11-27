@@ -685,6 +685,20 @@ with the query parameters `source`, `chat`, `msg` (message id) and `at`
 reads the four values, removes them from the address with
 `history.replaceState()`, and opens the chat at that message.
 
+Each result also has attributes, as strings. Agents read them; the search
+box does not show them.
+
+| Attribute | When | Value |
+|---|---|---|
+| `messageId`, `chatId`, `sourceId` | Always | The ids of the hit. |
+| `kind` | Always | The message kind, for example `image`. |
+| `path` | The media file is in the user's files | Path relative to the user's root folder, for example `/WhatsApp/Media/WhatsApp Images/IMG-….jpg`. A file tool such as `get_file_content` opens it. |
+| `fileId`, `mime` | Same as `path` | The file id and the MIME type of the file. |
+
+The path lookup is the same as in `ApiController::attachMedia()`: the
+`file_id` of the media row, resolved in the user's own folder. A media file
+that is not linked or was deleted gives no `path`.
+
 Supported filters:
 
 | Filter | Type | Meaning |
@@ -786,6 +800,7 @@ the page to a display name.
 | `caption` | Caption from the backup, or null. |
 | `srcPath` | Path on the phone, or null. |
 | `suspicious` | True when WhatsApp flagged the file. |
+| `pending` | True when the file is not in Nextcloud yet, but a later media pass of the live sync can still fetch it: the media row has no `file_id`, fewer than `ArchiveStore::SYNC_TRIES` (3) failed fetches and a message with `in_backup` false, and live sync is on with a media limit above 0 (`WahaConfig::willFetch()`). `ArchiveStore::syncPendingSql()` holds the row rule for this field and for the media pass. While a row shows `pending`, the page (`MessageList.vue`) loads the rows from the oldest pending message again every 30 seconds when the tab is visible, also with realtime updates off, and takes only their media. |
 
 Rows with `deleted` set are left out of this route's rows when the
 `showDeleted` view preference of the calling user is off (see *View

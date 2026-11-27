@@ -307,6 +307,7 @@ OC.L10N.register(
         "When a linked file is deleted elsewhere in Nextcloud": "Wenn eine verknüpfte Datei anderswo in Nextcloud gelöscht wird",
         "With 0, the sync loads no media files. The maximum is 200.": "Bei 0 lädt die Synchronisierung keine Mediendateien. Das Maximum ist 200.",
         "Yesterday": "Gestern",
+        "arrives with the next sync": "kommt mit der nächsten Synchronisierung",
         "imported {when}": "importiert am {when}",
         "not in Nextcloud": "nicht in Nextcloud",
         "not synced yet": "noch nicht synchronisiert",

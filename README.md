@@ -4,6 +4,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg" alt="License: AGPL v3"></a>
   <img src="https://img.shields.io/badge/Nextcloud-32--35-0082c9" alt="Nextcloud 32 to 35">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status: beta">
+  <a href="docs/USER-GUIDE.md#mcp-support-ai-agents"><img src="https://img.shields.io/badge/MCP-AI%20agents-8a2be2" alt="MCP support for AI agents"></a>
 </p>
 
 Browse and search your WhatsApp backup inside Nextcloud.
@@ -35,6 +36,25 @@ I already keep everything in Nextcloud, and the phone already uploads the
 backup and the media there. So the archive belongs in Nextcloud too: the
 files are in place, the accounts are in place, and nothing has to leave the
 server.
+
+## MCP support: ask an AI agent about your chats
+
+Chat Archive makes your WhatsApp history searchable for AI agents through
+MCP (Model Context Protocol). Connect an agent such as Claude Code to the
+Nextcloud [Context Agent](https://apps.nextcloud.com/apps/context_agent)
+MCP server, and ask in plain words:
+
+> "What did we agree about the invoice in March?"
+> "Find the photos that Anna sent last week."
+
+The agent gets the tool `search_chat_archive_messages`, with the same
+filters as the app: text, date range, chat, type and sender. Each result
+links to the message. A photo or document also comes with its path in
+your files, so the agent can open the file itself.
+
+The archive stays on your server. The agent sees only the archive of the
+user whose app password it uses. The
+[user guide](docs/USER-GUIDE.md#mcp-support-ai-agents) shows the setup.
 
 ## What it is, and what it is not
 
@@ -74,8 +94,8 @@ the WhatsApp number at risk. Read the warning in the
   The importer is built for other platforms later.
 - **Unified search**: the Nextcloud search box finds your messages through
   the search provider of the app, with filters for the term, the date range,
-  the chat, the source, the type and the sender. The agent paths that use
-  this provider are in [docs/roadmap.md](docs/roadmap.md).
+  the chat, the source, the type and the sender. The same provider serves
+  AI agents; see [MCP support](#mcp-support-ask-an-ai-agent-about-your-chats).
 
 ## Requirements
 
@@ -117,7 +137,7 @@ a source under Settings → Personal → Chat Archive first. The
 
 ## Documentation
 
-- [User guide](docs/USER-GUIDE.md): setup, import, search, delete policies,
+- [User guide](docs/USER-GUIDE.md): setup, import, search, MCP support, delete policies,
   troubleshooting.
 - [Developer guide](docs/DEVELOPER-GUIDE.md): architecture, import, the OCS
   API, build, tests, release.

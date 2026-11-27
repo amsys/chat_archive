@@ -1,6 +1,7 @@
 <!--
   The file of one message: a preview or a link when the file is in
-  Nextcloud, a note when it is not, and a warning when WhatsApp flagged it.
+  Nextcloud, a spinner while the live sync can still fetch it, a note when
+  it is not, and a warning when WhatsApp flagged it.
 -->
 <template>
 	<div class="ca-media">
@@ -83,6 +84,10 @@
 				</NcActions>
 			</div>
 		</template>
+		<div v-else-if="media.pending" class="ca-media__missing" dir="auto">
+			<NcLoadingIcon :size="20" />
+			<span>{{ media.fileName || kindLabel(kind) }} — {{ t('chat_archive', 'arrives with the next sync') }}</span>
+		</div>
 		<div v-else class="ca-media__missing" dir="auto">
 			<FileHidden :size="20" />
 			<span>{{ media.fileName || media.srcPath || kindLabel(kind) }} — {{ t('chat_archive', 'not in Nextcloud') }}</span>
@@ -96,7 +101,7 @@
 <script>
 import { getDialogBuilder } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
-import { NcActionButton, NcActionLink, NcActions, NcButton, NcNoteCard } from '@nextcloud/vue'
+import { NcActionButton, NcActionLink, NcActions, NcButton, NcLoadingIcon, NcNoteCard } from '@nextcloud/vue'
 import Download from 'vue-material-design-icons/Download.vue'
 import FileDocument from 'vue-material-design-icons/FileDocument.vue'
 import FileHidden from 'vue-material-design-icons/FileHidden.vue'
@@ -107,7 +112,7 @@ import { isAudio, isImage, isVideo, kindLabel } from '../util.js'
 
 export default {
 	name: 'MediaView',
-	components: { NcActions, NcActionButton, NcActionLink, NcButton, NcNoteCard, Download, FileDocument, FileHidden, Folder, Laptop },
+	components: { NcActions, NcActionButton, NcActionLink, NcButton, NcLoadingIcon, NcNoteCard, Download, FileDocument, FileHidden, Folder, Laptop },
 	props: {
 		media: { type: Object, required: true },
 		kind: { type: String, default: '' },

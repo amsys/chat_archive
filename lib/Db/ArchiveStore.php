@@ -12,6 +12,8 @@ use OCP\IDBConnection;
 class ArchiveStore {
 	public const PAGE = 100;
 	public const SEARCH_LIMIT = 50;
+	/** The live sync stops fetching a media file after this many failed fetches. */
+	public const SYNC_TRIES = 3;
 	public const INDEX_PAGE = 1000;
 	/** Message kinds whose body can change after an edit on the phone. */
 	public const EDITABLE = ['text', 'image', 'video', 'document', 'gif'];
@@ -443,7 +445,7 @@ class ArchiveStore {
 
 	/**
 	 * Media rows that the live sync may still fetch from WAHA: no file yet,
-	 * fewer than 3 failed fetches, and a message that only the sync has seen.
+	 * fewer than SYNC_TRIES failed fetches, and a message that only the sync has seen.
 	 * Rows with fewer failed fetches come first, so a file that WAHA cannot
 	 * give does not hold back the files behind it. Then newest sent_at first.
 	 * @return list<array{id:int, message_id:int, platform_msg_id:string, platform_chat_id:string, from_me:bool, mime:?string, file_name:?string, sent_at:int}>
@@ -456,12 +458,7 @@ class ArchiveStore {
 			->join('md', 'chatarchive_message', 'm', $q->expr()->eq('m.id', 'md.message_id'))
 			->join('m', 'chatarchive_chat', 'c', $q->expr()->eq('c.id', 'm.chat_id'))
 			->where($q->expr()->eq('md.source_id', $q->createNamedParameter($sourceId, IQueryBuilder::PARAM_INT)))
-			->andWhere($q->expr()->isNull('md.file_id'))
-			->andWhere($q->expr()->orX(
-				$q->expr()->isNull('md.sync_tries'),
-				$q->expr()->lt('md.sync_tries', $q->createNamedParameter(3, IQueryBuilder::PARAM_INT)),
-			))
-			->andWhere($q->expr()->eq('m.in_backup', $q->createNamedParameter(false, IQueryBuilder::PARAM_BOOL)))
+			->andWhere($this->syncPendingSql($q))
 			->orderBy($q->createFunction('COALESCE(' . $q->getColumnName('sync_tries', 'md') . ', 0)'), 'ASC')
 			->addOrderBy('m.sent_at', 'DESC')->addOrderBy('md.id', 'DESC')
 			->setMaxResults($limit);
@@ -475,6 +472,19 @@ class ArchiveStore {
 			'file_name' => $r['file_name'],
 			'sent_at' => (int)$r['sent_at'],
 		], $q->executeQuery()->fetchAll());
+	}
+
+	/**
+	 * The SQL condition of a media row that the live sync may still fetch:
+	 * no file yet, fewer than SYNC_TRIES failed fetches, and a message that
+	 * only the sync has seen. A NULL in_backup counts as true, so it does not
+	 * match. The query must name the media table md and the message table m.
+	 */
+	private function syncPendingSql(IQueryBuilder $q): string {
+		return $q->getColumnName('file_id', 'md') . ' IS NULL'
+			. ' AND COALESCE(' . $q->getColumnName('sync_tries', 'md') . ', 0) < '
+			. $q->createNamedParameter(self::SYNC_TRIES, IQueryBuilder::PARAM_INT)
+			. ' AND ' . $q->getColumnName('in_backup', 'm') . ' = ' . $q->createNamedParameter(false, IQueryBuilder::PARAM_BOOL);
 	}
 
 	/**
@@ -1046,9 +1056,12 @@ class ArchiveStore {
 			return [];
 		}
 		$q = $this->db->getQueryBuilder();
-		$q->select('id', 'message_id', 'mime', 'size', 'file_name', 'caption', 'src_path', 'file_id', 'suspicious')
-			->from('chatarchive_media')
-			->where($q->expr()->in('message_id', $q->createNamedParameter($messageIds, IQueryBuilder::PARAM_INT_ARRAY)));
+		$q->select('md.id', 'md.message_id', 'md.mime', 'md.size', 'md.file_name', 'md.caption', 'md.src_path', 'md.file_id',
+			'md.suspicious')
+			->selectAlias($q->createFunction('CASE WHEN ' . $this->syncPendingSql($q) . ' THEN 1 ELSE 0 END'), 'sync_pending')
+			->from('chatarchive_media', 'md')
+			->join('md', 'chatarchive_message', 'm', $q->expr()->eq('m.id', 'md.message_id'))
+			->where($q->expr()->in('md.message_id', $q->createNamedParameter($messageIds, IQueryBuilder::PARAM_INT_ARRAY)));
 		$out = [];
 		foreach ($q->executeQuery()->fetchAll() as $r) {
 			$out[(int)$r['message_id']] = [
@@ -1060,6 +1073,8 @@ class ArchiveStore {
 				'srcPath' => DisplayText::name($r['src_path']),
 				'fileId' => self::intOrNull($r['file_id']),
 				'suspicious' => ((int)($r['suspicious'] ?? 0)) > 0,
+				// true when pendingSyncMedia() would list the row
+				'syncPending' => (int)$r['sync_pending'] === 1,
 			];
 		}
 		return $out;

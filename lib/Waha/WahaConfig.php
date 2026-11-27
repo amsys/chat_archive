@@ -52,6 +52,15 @@ class WahaConfig {
 		return $this->config->getAppValueInt('waha_media_per_run', 0);
 	}
 
+	/**
+	 * True when a later media pass will fetch a media row that the store
+	 * reports as pending for the sync: live sync is on and may fetch files.
+	 * The cheap checks come first, so a row that is not pending reads no key.
+	 */
+	public function willFetch(bool $syncPending): bool {
+		return $syncPending && $this->mediaPerRun() > 0 && $this->enabled();
+	}
+
 	/** True when an open chat can ask for its new messages every few seconds. Off by default. */
 	public function realtime(): bool {
 		return $this->enabled() && $this->config->getAppValueBool('waha_realtime', false);
